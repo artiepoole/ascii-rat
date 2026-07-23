@@ -35,6 +35,11 @@ const DEFAULT_END_DELAY_MS: u64 = 500;
 const DEFAULT_PRE_NL_DELAY_MS: u64 = 200;
 const DEFAULT_POST_NL_DELAY_MS: u64 = 500;
 
+/// Header comment line prepended to every emitted script, so a produced file is
+/// self-identifying as scribe output. A leading `#` line is a YAML comment, so
+/// it is ignored when the file is loaded back through `Script::from_yaml`.
+const HEADER_COMMENT: &str = "# recorded by ascii-rat-scribe";
+
 /// The serializable shape written to YAML.
 ///
 /// Field names and types mirror `ascii-rat-stage`'s `ScriptRaw` so the produced
@@ -73,9 +78,12 @@ impl ScriptDoc {
         }
     }
 
-    /// Serialize the document to a YAML string.
+    /// Serialize the document to a YAML string, prefixed with the
+    /// `# recorded by ascii-rat-scribe` header comment.
     pub fn to_yaml_string(&self) -> Result<String> {
-        serde_yaml::to_string(&self.to_yaml_doc()).context("failed to serialize script to YAML")
+        let body = serde_yaml::to_string(&self.to_yaml_doc())
+            .context("failed to serialize script to YAML")?;
+        Ok(format!("{HEADER_COMMENT}\n{body}"))
     }
 }
 
@@ -106,11 +114,11 @@ mod tests {
         let doc = sample_doc(vec![
             Action::Text("ls".to_string()),
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             },
             Action::Wait { seconds: 1.0 },
             Action::Key {
-                keys: vec![KeyName::Down],
+                keys: vec![KeyName::Down.into()],
             },
         ]);
         let yaml = doc.to_yaml_string().expect("serialize");
@@ -132,18 +140,37 @@ mod tests {
         assert_eq!(
             script.actions[1],
             Action::Key {
-                keys: vec![KeyName::Enter]
+                keys: vec![KeyName::Enter.into()]
             }
         );
         assert_eq!(script.actions[2], Action::Wait { seconds: 1.0 });
         assert_eq!(
             script.actions[3],
             Action::Key {
-                keys: vec![KeyName::Down]
+                keys: vec![KeyName::Down.into()]
             }
         );
         // Terminated by END_REC.
         assert_eq!(script.actions.last().unwrap(), &Action::End);
+    }
+
+    #[test]
+    fn emitted_yaml_carries_recorded_by_header_and_still_parses() {
+        // Every scribe output file must start with the identifying comment, and
+        // that leading YAML comment must not stop the file from loading back.
+        let doc = sample_doc(vec![Action::Text("ls".to_string())]);
+        let yaml = doc.to_yaml_string().expect("serialize");
+        assert!(
+            yaml.starts_with("# recorded by ascii-rat-scribe\n"),
+            "emitted YAML should start with the recorded-by header:\n{yaml}"
+        );
+
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("scribe-header-{}.yaml", std::process::id()));
+        std::fs::write(&path, &yaml).unwrap();
+        let script = Script::from_yaml(&path).expect("header-prefixed YAML should parse");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(script.output_file, "demo.cast");
     }
 
     #[test]

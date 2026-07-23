@@ -10,7 +10,7 @@ use crate::pty::{OutputChunk, PtySession};
 use anyhow::{Context, Result};
 use portable_pty::CommandBuilder;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -25,6 +25,27 @@ const RNG_SEED: u64 = 12345;
 /// Default PTY size used when `cols`/`rows` are not set in the script.
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
+
+/// Default timeout (seconds) for an `Expect` action when none is given: how long
+/// to wait for the expected substring before giving up and continuing. Generous
+/// so a slow command still matches, but bounded so a typo never hangs forever.
+const DEFAULT_EXPECT_TIMEOUT: f64 = 30.0;
+
+/// Default show duration (seconds) for an `InlineComment` action: how long the
+/// typed note lingers on screen before it is wiped, and again the settle after
+/// wiping it. Matches the hand-written `Wait: 0.4` this shortcut replaces.
+const DEFAULT_INLINE_COMMENT_SHOW: f64 = 0.4;
+
+/// The `Ctrl-U` keypress used by an `InlineComment` action to wipe the typed
+/// note (kill the whole input line) before continuing.
+const CTRL_U: Key = Key {
+    name: KeyName::Char('u'),
+    mods: Mods {
+        ctrl: true,
+        alt: false,
+        shift: false,
+    },
+};
 
 /// Terminal type advertised to the child (via `TERM`) and stored in the cast
 /// header. A full-screen TUI queries the terminfo database for this name to
@@ -78,6 +99,16 @@ pub enum Action {
     Marker { label: String },
     /// Inserts a comment (caption) event.
     Comment { comment: String },
+    /// Types a throwaway note into the terminal, shows it briefly, then wipes
+    /// the whole line with `Ctrl-U` before continuing.
+    ///
+    /// A shortcut for the common `Text("# ...") + Wait + Ctrl-U + Wait`
+    /// four-action pattern used to flash an on-screen note (unlike `Comment`,
+    /// which is a cast caption and never typed into the terminal). The `text` is
+    /// typed verbatim (so include your own `# ` prefix if you want it to look
+    /// like a shell comment), lingers for `show` seconds, is cleared with
+    /// `Ctrl-U`, then settles for another `show` seconds.
+    InlineComment { text: String, show: f64 },
     /// Sends a sequence of named keys (e.g. `Down`, `Enter`, `Esc`) in order.
     ///
     /// A single `Key` action can queue several keypresses: either the legacy
@@ -85,9 +116,23 @@ pub enum Action {
     /// (send each named key once, in order). Both are normalized into this
     /// flattened list of keys. The dedicated `key_delay` is slept after each
     /// keypress.
-    Key { keys: Vec<KeyName> },
+    ///
+    /// Each entry is a [`Key`] — a base [`KeyName`] plus any modifiers (Ctrl,
+    /// Alt, Shift), so a combo such as `Ctrl-C` or `Ctrl-Shift-Right` is a
+    /// single keypress.
+    Key { keys: Vec<Key> },
     /// Pauses the recording for `seconds` (capturing output during the pause).
     Wait { seconds: f64 },
+    /// Blocks until `text` appears in the child's output (capturing output
+    /// during the wait), or `timeout` seconds elapse.
+    ///
+    /// A general synchronization primitive: instead of guessing a fixed `Wait`,
+    /// pause the script until the terminal actually prints an expected
+    /// substring (case-insensitive). Handy for waiting on a command to finish
+    /// before typing the next one (e.g. a nested `ascii-rat-bard` replay that
+    /// prints a known line, or a shell prompt). If the substring never appears
+    /// the script continues after `timeout` rather than hanging forever.
+    Expect { text: String, timeout: f64 },
     /// Ends the recording at this point (the `END_REC:` action).
     ///
     /// Any actions after it are ignored and no further child output is captured,
@@ -106,11 +151,13 @@ impl Action {
             Action::Input { text, .. } => format!("type {text:?}"),
             Action::Marker { label } => format!("marker {label:?}"),
             Action::Comment { comment } => format!("comment {comment:?}"),
+            Action::InlineComment { text, .. } => format!("inline comment {text:?}"),
             Action::Key { keys } => {
-                let names: Vec<&str> = keys.iter().map(|k| k.label()).collect();
+                let names: Vec<String> = keys.iter().map(|k| k.label()).collect();
                 format!("key {}", names.join(" "))
             }
             Action::Wait { seconds } => format!("wait {seconds}s"),
+            Action::Expect { text, .. } => format!("expect {text:?}"),
             Action::End => "end recording".to_string(),
         }
     }
@@ -136,6 +183,10 @@ pub enum KeyName {
     PageUp,
     PageDown,
     Space,
+    /// A single printable character used as the base of a modifier combo (e.g.
+    /// the `c` in `Ctrl-C`). It is never produced by [`KeyName::parse`] and is
+    /// not one of the [`KeyName::ALL`] named keys; only [`Key`] constructs it.
+    Char(char),
 }
 
 impl KeyName {
@@ -178,6 +229,9 @@ impl KeyName {
             KeyName::PageUp => "PageUp",
             KeyName::PageDown => "PageDown",
             KeyName::Space => "Space",
+            // `Char` is only ever used as the base of a modifier combo and is
+            // rendered by [`Key::label`], which handles it before delegating.
+            KeyName::Char(_) => unreachable!("KeyName::Char has no static label"),
         }
     }
 
@@ -201,6 +255,8 @@ impl KeyName {
             KeyName::PageUp => b"\x1b[5~",
             KeyName::PageDown => b"\x1b[6~",
             KeyName::Space => b" ",
+            // `Char` bytes are produced by [`Key::bytes`], not here.
+            KeyName::Char(_) => unreachable!("KeyName::Char has no static bytes"),
         }
     }
 
@@ -234,6 +290,393 @@ impl KeyName {
     /// match. This exact-match lookup only returns `Esc` for a lone `\x1b`.
     pub fn from_bytes(seq: &[u8]) -> Option<KeyName> {
         KeyName::ALL.into_iter().find(|k| k.bytes() == seq)
+    }
+
+    /// Whether this key is one of the cursor/navigation keys whose modified
+    /// form uses the xterm CSI-with-parameter encoding (`ESC [ 1 ; <p> A`,
+    /// `ESC [ 5 ; <p> ~`, …). The arrows use the SS3 form only when unmodified.
+    fn is_csi_nav(self) -> bool {
+        matches!(
+            self,
+            KeyName::Up
+                | KeyName::Down
+                | KeyName::Left
+                | KeyName::Right
+                | KeyName::Home
+                | KeyName::End
+                | KeyName::PageUp
+                | KeyName::PageDown
+                | KeyName::Delete
+        )
+    }
+}
+
+/// A set of keyboard modifiers held while a key is pressed.
+///
+/// `Ctrl`, `Alt`, and `Shift` compose freely (e.g. `Ctrl-Shift-Right`). An
+/// empty set means the key is pressed on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+impl Mods {
+    /// No modifiers held.
+    pub const NONE: Mods = Mods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+    };
+
+    fn is_empty(self) -> bool {
+        !self.ctrl && !self.alt && !self.shift
+    }
+
+    /// The xterm modifier parameter used in CSI-with-parameter sequences:
+    /// `1 + (shift?1) + (alt?2) + (ctrl?4)` (so plain is `1`, Shift is `2`,
+    /// Ctrl is `5`, Ctrl-Shift is `6`, …).
+    fn csi_param(self) -> u8 {
+        1 + (self.shift as u8) + 2 * (self.alt as u8) + 4 * (self.ctrl as u8)
+    }
+
+    /// Recover a modifier set from a CSI parameter (the inverse of
+    /// [`Mods::csi_param`]). Returns `None` for an out-of-range value.
+    fn from_csi_param(param: u8) -> Option<Mods> {
+        if !(1..=8).contains(&param) {
+            return None;
+        }
+        let bits = param - 1;
+        Some(Mods {
+            shift: bits & 1 != 0,
+            alt: bits & 2 != 0,
+            ctrl: bits & 4 != 0,
+        })
+    }
+}
+
+/// A single keypress: a base [`KeyName`] plus any held [`Mods`].
+///
+/// A plain key (no modifiers) behaves exactly like the underlying [`KeyName`]
+/// did before modifiers existed, so existing scripts and casts are unaffected.
+/// Modified combos (`Ctrl-C`, `Alt-x`, `Shift-Tab`, `Ctrl-Shift-Right`, …)
+/// compute their byte sequence from the base key and the modifier set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Key {
+    pub name: KeyName,
+    pub mods: Mods,
+}
+
+impl From<KeyName> for Key {
+    fn from(name: KeyName) -> Key {
+        Key::plain(name)
+    }
+}
+
+/// Compare a [`Key`] to a bare [`KeyName`] as if the key had no modifiers, so
+/// tests and callers can write `key == KeyName::Down` for a plain keypress.
+impl PartialEq<KeyName> for Key {
+    fn eq(&self, other: &KeyName) -> bool {
+        self.mods.is_empty() && self.name == *other
+    }
+}
+
+impl Key {
+    /// A key pressed on its own (no modifiers).
+    pub fn plain(name: KeyName) -> Key {
+        Key {
+            name,
+            mods: Mods::NONE,
+        }
+    }
+
+    /// The base key for a printable ASCII character (used for combos such as
+    /// `Ctrl-C`/`Alt-x`, where the base is a letter rather than a named key).
+    /// Stored as a single-character [`KeyName::Char`].
+    fn char(c: char) -> KeyName {
+        KeyName::Char(c)
+    }
+
+    /// Parse a key spec (case-insensitive), accepting modifier prefixes joined
+    /// by `-` in any order, e.g. `Ctrl-C`, `alt-x`, `Shift-Tab`,
+    /// `Ctrl-Shift-Right`. A spec with no modifiers must be a named key (a bare
+    /// printable character is left to be typed as text, not treated as a key).
+    ///
+    /// Modifier tokens: `Ctrl`/`Control`, `Alt`/`Meta`/`Option`, `Shift`. The
+    /// final token is the base key: either a [`KeyName`] name/alias, or (only
+    /// when at least one modifier is present) a single printable character.
+    pub fn parse(spec: &str) -> Option<Key> {
+        // Fast path: a plain named key (possibly containing no '-').
+        if let Some(name) = KeyName::parse(spec) {
+            return Some(Key::plain(name));
+        }
+
+        let mut mods = Mods::default();
+        let parts: Vec<&str> = spec.split('-').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let (base, prefixes) = parts.split_last().unwrap();
+        for token in prefixes {
+            match token.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => mods.ctrl = true,
+                "alt" | "meta" | "option" => mods.alt = true,
+                "shift" => mods.shift = true,
+                _ => return None,
+            }
+        }
+        if mods.is_empty() {
+            return None;
+        }
+
+        // The base is either a named key or a single printable character.
+        let name = if let Some(name) = KeyName::parse(base) {
+            name
+        } else {
+            let mut chars = base.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() || !c.is_ascii_graphic() && c != ' ' {
+                return None;
+            }
+            Key::char(c)
+        };
+        Some(Key { name, mods })
+    }
+
+    /// The canonical text form used in YAML and progress display, e.g. `Down`,
+    /// `Ctrl-C`, `Alt-x`, `Ctrl-Shift-Right`. Plain keys serialize exactly as
+    /// before so existing scripts round-trip unchanged.
+    pub fn label(self) -> String {
+        let base = match self.name {
+            KeyName::Char(c) => c.to_string(),
+            other => other.label().to_string(),
+        };
+        if self.mods.is_empty() {
+            return base;
+        }
+        let mut out = String::new();
+        if self.mods.ctrl {
+            out.push_str("Ctrl-");
+        }
+        if self.mods.alt {
+            out.push_str("Alt-");
+        }
+        if self.mods.shift {
+            out.push_str("Shift-");
+        }
+        out.push_str(&base);
+        out
+    }
+
+    /// The raw byte sequence sent to the child for this keypress.
+    ///
+    /// - No modifiers: the base [`KeyName`]'s bytes.
+    /// - `Ctrl` + ASCII letter (and a few punctuation keys): the C0 control
+    ///   byte, e.g. `Ctrl-C` → `0x03`.
+    /// - `Alt` + key: `ESC` followed by the key's own bytes.
+    /// - `Shift-Tab`: the back-tab `ESC [ Z`.
+    /// - Modified cursor/nav keys: the xterm CSI-with-parameter form.
+    pub fn bytes(self) -> Vec<u8> {
+        if self.mods.is_empty() {
+            return match self.name {
+                KeyName::Char(c) => c.to_string().into_bytes(),
+                other => other.bytes().to_vec(),
+            };
+        }
+
+        // Shift-Tab has its own dedicated sequence.
+        if self.name == KeyName::Tab && self.mods == (Mods { shift: true, ..Mods::NONE }) {
+            return b"\x1b[Z".to_vec();
+        }
+
+        // Modified cursor/navigation keys use CSI with a modifier parameter.
+        if self.name.is_csi_nav() {
+            let p = self.mods.csi_param();
+            let seq = match self.name {
+                KeyName::Up => format!("\x1b[1;{p}A"),
+                KeyName::Down => format!("\x1b[1;{p}B"),
+                KeyName::Right => format!("\x1b[1;{p}C"),
+                KeyName::Left => format!("\x1b[1;{p}D"),
+                KeyName::Home => format!("\x1b[1;{p}H"),
+                KeyName::End => format!("\x1b[1;{p}F"),
+                KeyName::PageUp => format!("\x1b[5;{p}~"),
+                KeyName::PageDown => format!("\x1b[6;{p}~"),
+                KeyName::Delete => format!("\x1b[3;{p}~"),
+                _ => unreachable!("is_csi_nav covers exactly these keys"),
+            };
+            return seq.into_bytes();
+        }
+
+        // Ctrl + a single character or a printable named key → C0 control byte.
+        // Combined with Alt, the sequence is prefixed with ESC.
+        if self.mods.ctrl {
+            if let Some(ctrl_byte) = self.ctrl_byte() {
+                let mut out = Vec::new();
+                if self.mods.alt {
+                    out.push(0x1b);
+                }
+                out.push(ctrl_byte);
+                return out;
+            }
+        }
+
+        // Alt + <key> (no usable Ctrl encoding): ESC followed by the key bytes.
+        if self.mods.alt {
+            let mut out = vec![0x1b];
+            match self.name {
+                KeyName::Char(c) => out.extend_from_slice(c.to_string().as_bytes()),
+                other => out.extend_from_slice(other.bytes()),
+            }
+            return out;
+        }
+
+        // A modifier combination with no standard encoding (e.g. bare Shift on a
+        // letter): fall back to the base key's own bytes.
+        match self.name {
+            KeyName::Char(c) => c.to_string().into_bytes(),
+            other => other.bytes().to_vec(),
+        }
+    }
+
+    /// The C0 control byte for a `Ctrl-<key>` combo, if one exists.
+    ///
+    /// `Ctrl-A`..`Ctrl-Z` map to `0x01`..`0x1a`; a handful of punctuation keys
+    /// have standard control bytes too (`Ctrl-Space`=NUL, `Ctrl-[`=ESC, etc.).
+    fn ctrl_byte(self) -> Option<u8> {
+        let c = match self.name {
+            KeyName::Char(c) => c,
+            KeyName::Space => ' ',
+            _ => return None,
+        };
+        let upper = c.to_ascii_uppercase();
+        match upper {
+            'A'..='Z' => Some((upper as u8) & 0x1f),
+            ' ' => Some(0x00),
+            '[' => Some(0x1b),
+            '\\' => Some(0x1c),
+            ']' => Some(0x1d),
+            '^' => Some(0x1e),
+            '_' => Some(0x1f),
+            '@' => Some(0x00),
+            _ => None,
+        }
+    }
+
+    /// Map a raw byte sequence back to the keypress that produces it (the
+    /// inverse of [`Key::bytes`]), for the recorder. Recognizes plain named
+    /// keys, `Ctrl-<letter>` control bytes, `Shift-Tab`, and modified CSI
+    /// cursor/nav sequences. Returns `None` if nothing matches exactly.
+    pub fn from_bytes(seq: &[u8]) -> Option<Key> {
+        // Plain named keys first (Enter/Tab/Esc/arrows/etc.).
+        if let Some(name) = KeyName::from_bytes(seq) {
+            return Some(Key::plain(name));
+        }
+
+        // Shift-Tab: ESC [ Z.
+        if seq == b"\x1b[Z" {
+            return Some(Key {
+                name: KeyName::Tab,
+                mods: Mods {
+                    shift: true,
+                    ..Mods::NONE
+                },
+            });
+        }
+
+        // Modified CSI cursor/nav sequences: `ESC [ 1 ; <p> <A-F|H>` and
+        // `ESC [ <3|5|6> ; <p> ~`.
+        if let Some(key) = Key::from_csi_modified(seq) {
+            return Some(key);
+        }
+
+        // A single C0 control byte → Ctrl-<letter> (but not the ones already
+        // owned by named keys: CR/LF=Enter, HT=Tab, ESC=Esc, DEL=Backspace).
+        if seq.len() == 1 {
+            let b = seq[0];
+            if let Some(key) = Key::ctrl_from_byte(b) {
+                return Some(key);
+            }
+        }
+
+        None
+    }
+
+    /// Decode a modified CSI cursor/nav sequence into a [`Key`], or `None`.
+    fn from_csi_modified(seq: &[u8]) -> Option<Key> {
+        if seq.len() < 4 || &seq[..2] != b"\x1b[" {
+            return None;
+        }
+        let body = &seq[2..];
+        // Split "<lead>;<param><final>" — lead is 1/3/5/6, final is a letter or
+        // '~'. There must be exactly one ';'.
+        let semi = body.iter().position(|&b| b == b';')?;
+        let lead = std::str::from_utf8(&body[..semi]).ok()?;
+        let rest = &body[semi + 1..];
+        if rest.len() < 2 {
+            return None;
+        }
+        let (param_bytes, final_byte) = rest.split_at(rest.len() - 1);
+        let param: u8 = std::str::from_utf8(param_bytes).ok()?.parse().ok()?;
+        let mods = Mods::from_csi_param(param)?;
+        if mods.is_empty() {
+            return None;
+        }
+        let final_byte = final_byte[0];
+        let name = match (lead, final_byte) {
+            ("1", b'A') => KeyName::Up,
+            ("1", b'B') => KeyName::Down,
+            ("1", b'C') => KeyName::Right,
+            ("1", b'D') => KeyName::Left,
+            ("1", b'H') => KeyName::Home,
+            ("1", b'F') => KeyName::End,
+            ("3", b'~') => KeyName::Delete,
+            ("5", b'~') => KeyName::PageUp,
+            ("6", b'~') => KeyName::PageDown,
+            _ => return None,
+        };
+        Some(Key { name, mods })
+    }
+
+    /// Map a lone C0 control byte to `Ctrl-<letter>`, skipping bytes that are
+    /// already meaningful as named keys (so the recorder keeps decoding CR/LF as
+    /// Enter, HT as Tab, ESC as Esc, and DEL as Backspace).
+    fn ctrl_from_byte(b: u8) -> Option<Key> {
+        match b {
+            b'\r' | b'\n' | b'\t' | 0x1b | 0x7f => None,
+            0x00 => Some(Key {
+                name: Key::char(' '),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::NONE
+                },
+            }),
+            0x01..=0x1a => {
+                let letter = (b + b'a' - 1) as char;
+                Some(Key {
+                    name: Key::char(letter),
+                    mods: Mods {
+                        ctrl: true,
+                        ..Mods::NONE
+                    },
+                })
+            }
+            0x1c => Some(Key {
+                name: Key::char('\\'),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::NONE
+                },
+            }),
+            0x1d => Some(Key {
+                name: Key::char(']'),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::NONE
+                },
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -292,6 +735,27 @@ impl<'de> Deserialize<'de> for Action {
                     "Comment" => Action::Comment {
                         comment: map.next_value()?,
                     },
+                    // `InlineComment: "# note"` — type the note, flash it, then
+                    // wipe it with Ctrl-U. The mapping form `InlineComment: {text:
+                    // "..", show: 1.0}` overrides how long it lingers.
+                    "InlineComment" => {
+                        let raw: InlineCommentField = map.next_value()?;
+                        let (text, show) = match raw {
+                            InlineCommentField::Text(text) => {
+                                (text, DEFAULT_INLINE_COMMENT_SHOW)
+                            }
+                            InlineCommentField::Full { text, show } => (text, show),
+                        };
+                        if text.is_empty() {
+                            return Err(de::Error::custom(
+                                "`InlineComment` text must not be empty",
+                            ));
+                        }
+                        if show < 0.0 {
+                            return Err(de::Error::custom("InlineComment show must be >= 0"));
+                        }
+                        Action::InlineComment { text, show }
+                    }
                     // `Keys: [Down, Down, Enter]` — a sequence of named keys sent
                     // in order (queue several distinct keys in one action).
                     "Keys" => {
@@ -302,7 +766,7 @@ impl<'de> Deserialize<'de> for Action {
                         let keys = names
                             .iter()
                             .map(|name| {
-                                KeyName::parse(name).ok_or_else(|| {
+                                Key::parse(name).ok_or_else(|| {
                                     de::Error::custom(format!("Invalid key name {name}"))
                                 })
                             })
@@ -316,6 +780,24 @@ impl<'de> Deserialize<'de> for Action {
                         }
                         Action::Wait { seconds }
                     }
+                    // `Expect: "substr"` — block until the substring appears in
+                    // the child's output (case-insensitive), or the default
+                    // timeout elapses. The mapping form `Expect: {text: "..",
+                    // timeout: 5}` overrides the timeout.
+                    "Expect" => {
+                        let raw: ExpectField = map.next_value()?;
+                        let (text, timeout) = match raw {
+                            ExpectField::Text(text) => (text, DEFAULT_EXPECT_TIMEOUT),
+                            ExpectField::Full { text, timeout } => (text, timeout),
+                        };
+                        if text.is_empty() {
+                            return Err(de::Error::custom("`Expect` text must not be empty"));
+                        }
+                        if timeout < 0.0 {
+                            return Err(de::Error::custom("Expect timeout must be >= 0"));
+                        }
+                        Action::Expect { text, timeout }
+                    }
                     // `END_REC:` takes no meaningful value (write `END_REC:` or
                     // `END_REC: ~`); it stops the recording where it appears.
                     // Named to avoid clashing with the `End` special key, which
@@ -324,12 +806,14 @@ impl<'de> Deserialize<'de> for Action {
                         map.next_value::<de::IgnoredAny>()?;
                         Action::End
                     }
-                    // A bare special key `Down: 3` / `End: 1` (repeat the key
-                    // `count` times). The value is the repeat count (>= 1); it
-                    // may be omitted (e.g. `Esc:` or `Esc: ~`), which is treated
-                    // as a single press.
+                    // A bare special key `Down: 3` / `End: 1` / `Ctrl-C: 2`
+                    // (repeat the key `count` times). The tag may be a plain
+                    // named key or a modifier combo (`Ctrl-C`, `Shift-Tab`,
+                    // `Ctrl-Shift-Right`). The value is the repeat count (>= 1);
+                    // it may be omitted (e.g. `Esc:` or `Esc: ~`), which is
+                    // treated as a single press.
                     other => {
-                        let key = KeyName::parse(other).ok_or_else(|| {
+                        let key = Key::parse(other).ok_or_else(|| {
                             de::Error::custom(format!("Invalid action or key `{other}`"))
                         })?;
                         let count: u32 = map.next_value::<Option<u32>>()?.unwrap_or(1);
@@ -401,8 +885,26 @@ impl Serialize for Action {
                 map.serialize_entry("Comment", comment)?;
                 map.end()
             }
+            Action::InlineComment { text, show } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                // Emit the bare-string form when the show duration is the
+                // default, so the common case stays terse; otherwise emit the
+                // mapping so the custom duration round-trips.
+                if *show == DEFAULT_INLINE_COMMENT_SHOW {
+                    map.serialize_entry("InlineComment", text)?;
+                } else {
+                    map.serialize_entry(
+                        "InlineComment",
+                        &InlineCommentPayload {
+                            text: text.clone(),
+                            show: *show,
+                        },
+                    )?;
+                }
+                map.end()
+            }
             Action::Key { keys } => {
-                let labels: Vec<&'static str> = keys.iter().map(|k| k.label()).collect();
+                let labels: Vec<String> = keys.iter().map(|k| k.label()).collect();
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry("Keys", &labels)?;
                 map.end()
@@ -410,6 +912,24 @@ impl Serialize for Action {
             Action::Wait { seconds } => {
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry("Wait", seconds)?;
+                map.end()
+            }
+            Action::Expect { text, timeout } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                // Emit the bare-string form when the timeout is the default, so
+                // the common case stays terse; otherwise emit the mapping so the
+                // custom timeout round-trips.
+                if *timeout == DEFAULT_EXPECT_TIMEOUT {
+                    map.serialize_entry("Expect", text)?;
+                } else {
+                    map.serialize_entry(
+                        "Expect",
+                        &ExpectPayload {
+                            text: text.clone(),
+                            timeout: *timeout,
+                        },
+                    )?;
+                }
                 map.end()
             }
             Action::End => {
@@ -427,6 +947,41 @@ struct InputPayload {
     text: String,
     pre_nl_delay: f64,
     post_nl_delay: f64,
+}
+
+/// The value of an `Expect:` action: either a bare substring (using the default
+/// timeout) or a `{text, timeout}` mapping overriding it.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExpectField {
+    Text(String),
+    Full { text: String, timeout: f64 },
+}
+
+/// The `{text, timeout}` mapping form written when an `Expect` action carries a
+/// non-default timeout, so a produced script round-trips.
+#[derive(Debug, Serialize)]
+struct ExpectPayload {
+    text: String,
+    timeout: f64,
+}
+
+/// The value of an `InlineComment:` action: either a bare string (typed with the
+/// default show duration) or a `{text, show}` mapping overriding how long the
+/// note lingers before it is wiped.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum InlineCommentField {
+    Text(String),
+    Full { text: String, show: f64 },
+}
+
+/// The `{text, show}` mapping form written when an `InlineComment` action carries
+/// a non-default show duration, so a produced script round-trips.
+#[derive(Debug, Serialize)]
+struct InlineCommentPayload {
+    text: String,
+    show: f64,
 }
 
 /// Default sudo password prompts matched (case-insensitively) against the
@@ -732,12 +1287,24 @@ impl Script {
         self.sudo.is_some()
     }
 
-    /// The filter list to apply, ensuring a `Comment` filter is present when
-    /// comments are enabled (mirrors `with_comments_enabled`).
+    /// The filter list to apply.
+    ///
+    /// When comments are enabled a `Comment` filter is ensured (mirrors
+    /// `with_comments_enabled`), so comment actions render as captions. When
+    /// comments are disabled a `StripComments` filter is ensured instead, so any
+    /// stray `Comment` actions are removed before saving rather than crashing
+    /// the save (a `Comment` is an internal-only event that cannot be
+    /// serialized). This keeps a script that carries a `Comment` action but
+    /// leaves `with_comments` unset (e.g. one produced by `ascii-rat-scribe` and
+    /// then hand-edited) safe to replay and save.
     fn effective_filters(&self) -> Vec<Filter> {
         let mut filters = self.filters.clone();
-        if self.with_comments && !filters.iter().any(|f| matches!(f, Filter::Comment)) {
-            filters.push(Filter::Comment);
+        if self.with_comments {
+            if !filters.iter().any(|f| matches!(f, Filter::Comment)) {
+                filters.push(Filter::Comment);
+            }
+        } else if !filters.iter().any(|f| matches!(f, Filter::StripComments)) {
+            filters.push(Filter::StripComments);
         }
         filters
     }
@@ -777,6 +1344,13 @@ impl Script {
         // correct escape sequences instead of a scrambled stream (see
         // `resolve_term`). The same value is stored in the cast header.
         cmd.env("TERM", resolve_term());
+        // Start the child shell in our own current directory. Without this,
+        // portable-pty spawns it in the user's home directory rather than where
+        // the player was launched from, so a script's relative paths (and any
+        // nested ascii-rat invocations) would resolve unexpectedly.
+        if let Ok(cwd) = std::env::current_dir() {
+            cmd.cwd(cwd);
+        }
 
         let mut session = PtySession::spawn(cmd, cols, rows)?;
 
@@ -867,6 +1441,37 @@ impl Script {
                         comment: comment.clone(),
                     });
                 }
+                Action::InlineComment { text, show } => {
+                    // Type the note (no trailing newline — it is never
+                    // submitted), let it linger, then wipe the whole line with
+                    // Ctrl-U and settle. This is the `Text + Wait + Ctrl-U +
+                    // Wait` pattern collapsed into one action.
+                    send_line(
+                        &mut session,
+                        text,
+                        &mut rng,
+                        self.typing_delay,
+                        (0.0, 0.0),
+                        (0.0, 0.0),
+                        &mut output_chunks,
+                        watch,
+                    )?;
+                    sleep(Duration::from_secs_f64(*show));
+                    mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
+                    send_keys(
+                        &mut session,
+                        &[CTRL_U],
+                        &mut rng,
+                        self.key_delay,
+                        &mut output_chunks,
+                        watch,
+                    )?;
+                    sleep(Duration::from_secs_f64(*show));
+                    mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
+                    // Nothing was submitted, so no newline shift for a following
+                    // marker/comment.
+                    newline_delay = 0.0;
+                }
                 Action::Key { keys } => {
                     send_keys(
                         &mut session,
@@ -900,6 +1505,43 @@ impl Script {
                     // the launched program's startup frames are recorded.
                     sleep(Duration::from_secs_f64(*seconds));
                     mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
+                    // A wait is not a line, so the newline shift for a following
+                    // marker/comment should not apply.
+                    newline_delay = 0.0;
+                }
+                Action::Expect { text, timeout } => {
+                    // Block until the expected substring appears in *newly
+                    // arriving* output, capturing (and mirroring) everything
+                    // seen while we wait so the cast stays faithful.
+                    //
+                    // We deliberately do NOT scan the already-captured
+                    // `output_chunks` here: those may include the terminal's
+                    // echo of the command line that this `Expect` is meant to
+                    // synchronize on (e.g. `... ; echo DONE` — the typed line
+                    // contains `DONE` before the command has even run). Matching
+                    // that echo would return instantly and defeat the wait, so
+                    // we only look at output produced from this point onward.
+                    let needles = [text.as_str()];
+                    // Mirror each chunk to the live view *as it arrives* during
+                    // the wait. Using the plain `wait_for_output_matching` here
+                    // would buffer everything and only draw it after the marker
+                    // matched, so a long `Expect` looked frozen and then dumped
+                    // all its output at once (interleaving with the next act's
+                    // typing). The callback form flushes output live instead.
+                    let waited = session.wait_for_output_matching_each(
+                        &needles,
+                        Duration::from_secs_f64(*timeout),
+                        |chunk| {
+                            if watch {
+                                let mut stdout = std::io::stdout().lock();
+                                write_chunks_to(&mut stdout, std::slice::from_ref(chunk));
+                            }
+                        },
+                    )?;
+                    // Already mirrored above (per chunk); just capture the bytes
+                    // into the cast unchanged. Passing `watch: false` avoids
+                    // mirroring them a second time.
+                    mirror_and_capture(&mut output_chunks, waited, false);
                     // A wait is not a line, so the newline shift for a following
                     // marker/comment should not apply.
                     newline_delay = 0.0;
@@ -1069,14 +1711,14 @@ fn send_line(
 /// not race the terminal's handling of the final key.
 fn send_keys(
     session: &mut PtySession,
-    keys: &[KeyName],
+    keys: &[Key],
     rng: &mut StdRng,
     key_delay: (f64, f64),
     output_chunks: &mut Vec<OutputChunk>,
     watch: bool,
 ) -> Result<()> {
     for key in keys {
-        session.write(key.bytes())?;
+        session.write(&key.bytes())?;
         sleep(Duration::from_secs_f64(sample(rng, key_delay)));
         mirror_and_capture(output_chunks, session.drain_output(), watch);
     }
@@ -1228,7 +1870,7 @@ fn sample(rng: &mut StdRng, range: (f64, f64)) -> f64 {
     if high <= low {
         low
     } else {
-        rng.gen_range(low..=high)
+        rng.random_range(low..=high)
     }
 }
 
@@ -1488,7 +2130,7 @@ mod tests {
         assert_eq!(
             script.actions[2],
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             }
         );
         // Then a `Wait` giving the launched TUI time to paint, and the query.
@@ -1592,6 +2234,137 @@ mod tests {
         assert_eq!(KeyName::from_bytes(b"zzz"), None);
     }
 
+    #[test]
+    fn key_parse_plain_named_key_has_no_modifiers() {
+        let k = Key::parse("Down").expect("plain named key parses");
+        assert_eq!(k, Key::plain(KeyName::Down));
+        assert!(k.mods.is_empty());
+        // A bare printable character is NOT a key (it stays text).
+        assert_eq!(Key::parse("a"), None);
+    }
+
+    #[test]
+    fn key_parse_modifier_combos() {
+        // Ctrl + a letter (case-insensitive).
+        let ctrl_c = Key::parse("Ctrl-C").expect("Ctrl-C parses");
+        assert_eq!(ctrl_c.name, KeyName::Char('C'));
+        assert!(ctrl_c.mods.ctrl && !ctrl_c.mods.alt && !ctrl_c.mods.shift);
+        assert_eq!(Key::parse("ctrl-c").unwrap().label(), "Ctrl-c");
+
+        // Alt + a character, and Shift + a named key.
+        let alt_x = Key::parse("Alt-x").expect("Alt-x parses");
+        assert!(alt_x.mods.alt && !alt_x.mods.ctrl);
+        let shift_tab = Key::parse("Shift-Tab").expect("Shift-Tab parses");
+        assert_eq!(shift_tab.name, KeyName::Tab);
+        assert!(shift_tab.mods.shift);
+
+        // Order-independent, multiple modifiers.
+        let a = Key::parse("Ctrl-Shift-Right").unwrap();
+        let b = Key::parse("Shift-Ctrl-Right").unwrap();
+        assert_eq!(a, b);
+        assert!(a.mods.ctrl && a.mods.shift && a.name == KeyName::Right);
+
+        // An unknown modifier token fails.
+        assert_eq!(Key::parse("Hyper-x"), None);
+    }
+
+    #[test]
+    fn key_bytes_for_modifier_combos() {
+        // Ctrl + letter → the C0 control byte.
+        assert_eq!(Key::parse("Ctrl-C").unwrap().bytes(), vec![0x03]);
+        assert_eq!(Key::parse("Ctrl-D").unwrap().bytes(), vec![0x04]);
+        assert_eq!(Key::parse("Ctrl-U").unwrap().bytes(), vec![0x15]);
+        assert_eq!(Key::parse("Ctrl-A").unwrap().bytes(), vec![0x01]);
+
+        // Alt + char → ESC then the char.
+        assert_eq!(Key::parse("Alt-x").unwrap().bytes(), vec![0x1b, b'x']);
+
+        // Shift-Tab → the back-tab CSI.
+        assert_eq!(Key::parse("Shift-Tab").unwrap().bytes(), b"\x1b[Z".to_vec());
+
+        // Modified cursor/nav keys → xterm CSI-with-parameter.
+        assert_eq!(Key::parse("Ctrl-Right").unwrap().bytes(), b"\x1b[1;5C".to_vec());
+        assert_eq!(Key::parse("Shift-Up").unwrap().bytes(), b"\x1b[1;2A".to_vec());
+        assert_eq!(Key::parse("Ctrl-Shift-Left").unwrap().bytes(), b"\x1b[1;6D".to_vec());
+        assert_eq!(Key::parse("Ctrl-End").unwrap().bytes(), b"\x1b[1;5F".to_vec());
+        assert_eq!(Key::parse("Ctrl-PageDown").unwrap().bytes(), b"\x1b[6;5~".to_vec());
+
+        // A plain key still emits exactly the base bytes.
+        assert_eq!(Key::plain(KeyName::Down).bytes(), b"\x1bOB".to_vec());
+    }
+
+    #[test]
+    fn key_label_roundtrips_through_parse() {
+        for spec in [
+            "Down",
+            "Enter",
+            "Ctrl-c",
+            "Alt-x",
+            "Shift-Tab",
+            "Ctrl-Shift-Right",
+            "Ctrl-End",
+        ] {
+            let key = Key::parse(spec).unwrap_or_else(|| panic!("{spec} should parse"));
+            let reparsed = Key::parse(&key.label())
+                .unwrap_or_else(|| panic!("label {:?} should re-parse", key.label()));
+            assert_eq!(reparsed, key, "label round-trip failed for {spec}");
+        }
+    }
+
+    #[test]
+    fn key_from_bytes_recovers_modifier_combos() {
+        // Plain named keys still round-trip.
+        assert_eq!(Key::from_bytes(b"\r"), Some(Key::plain(KeyName::Enter)));
+        assert_eq!(Key::from_bytes(b"\x1bOB"), Some(Key::plain(KeyName::Down)));
+
+        // Ctrl-letter control bytes decode back to Ctrl-<letter>.
+        assert_eq!(Key::from_bytes(&[0x03]), Key::parse("Ctrl-c"));
+        assert_eq!(Key::from_bytes(&[0x15]), Key::parse("Ctrl-u"));
+
+        // Shift-Tab and modified CSI nav sequences decode back.
+        assert_eq!(Key::from_bytes(b"\x1b[Z"), Key::parse("Shift-Tab"));
+        assert_eq!(Key::from_bytes(b"\x1b[1;5C"), Key::parse("Ctrl-Right"));
+        assert_eq!(Key::from_bytes(b"\x1b[1;6D"), Key::parse("Ctrl-Shift-Left"));
+
+        // Bytes owned by named keys are NOT hijacked as Ctrl combos.
+        assert_eq!(Key::from_bytes(b"\t"), Some(Key::plain(KeyName::Tab)));
+        assert_eq!(Key::from_bytes(b"\x1b"), Some(Key::plain(KeyName::Esc)));
+        assert_eq!(Key::from_bytes(b"\x7f"), Some(Key::plain(KeyName::Backspace)));
+    }
+
+    #[test]
+    fn parse_ctrl_combo_shorthand_and_keys_list() {
+        // A bare `Ctrl-C:` mapping is a single Ctrl-C press; a count repeats it.
+        let yaml = script_yaml_with_actions("- Ctrl-C:\n- Ctrl-U: 2");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse ctrl combos");
+        assert_eq!(
+            script.actions[0],
+            Action::Key {
+                keys: vec![Key::parse("Ctrl-C").unwrap()],
+            }
+        );
+        assert_eq!(
+            script.actions[1],
+            Action::Key {
+                keys: vec![Key::parse("Ctrl-U").unwrap(), Key::parse("Ctrl-U").unwrap()],
+            }
+        );
+
+        // The `Keys: [..]` list accepts modifier combos too.
+        let yaml = script_yaml_with_actions("- Keys: [Ctrl-O, Enter, Ctrl-X]");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse keys list");
+        assert_eq!(
+            script.actions[0],
+            Action::Key {
+                keys: vec![
+                    Key::parse("Ctrl-O").unwrap(),
+                    KeyName::Enter.into(),
+                    Key::parse("Ctrl-X").unwrap(),
+                ],
+            }
+        );
+    }
+
     /// Deserialize a single `Action` from a one-item YAML sequence (the shape
     /// actions appear in inside a script) so the full `Action` grammar is
     /// exercised, including the bare-string `Text` form.
@@ -1619,13 +2392,29 @@ mod tests {
             Action::Comment {
                 comment: "a caption".to_string(),
             },
-            Action::Key {
-                keys: vec![KeyName::Down, KeyName::Down, KeyName::Enter],
+            Action::InlineComment {
+                text: "# a note".to_string(),
+                show: DEFAULT_INLINE_COMMENT_SHOW,
+            },
+            Action::InlineComment {
+                text: "# lingers longer".to_string(),
+                show: 1.5,
             },
             Action::Key {
-                keys: vec![KeyName::Esc],
+                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
+            },
+            Action::Key {
+                keys: vec![KeyName::Esc.into()],
             },
             Action::Wait { seconds: 1.5 },
+            Action::Expect {
+                text: "__DONE__".to_string(),
+                timeout: DEFAULT_EXPECT_TIMEOUT,
+            },
+            Action::Expect {
+                text: "ready".to_string(),
+                timeout: 5.0,
+            },
             Action::End,
         ];
 
@@ -1666,13 +2455,13 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Down, KeyName::Down],
+                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Down.into()],
             }
         );
         assert_eq!(
             script.actions[1],
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             }
         );
     }
@@ -1686,13 +2475,13 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Esc],
+                keys: vec![KeyName::Esc.into()],
             }
         );
         assert_eq!(
             script.actions[1],
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             }
         );
     }
@@ -1706,7 +2495,7 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Down, KeyName::Enter],
+                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
             }
         );
     }
@@ -1728,7 +2517,7 @@ mod tests {
         );
         assert_eq!(
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Enter],
+                keys: vec![KeyName::Down.into(), KeyName::Enter.into()],
             }
             .progress_label(),
             "key Down Enter"
@@ -1821,6 +2610,114 @@ actions:
     }
 
     #[test]
+    fn parse_expect_scalar_uses_default_timeout() {
+        // `Expect: "substr"` blocks until the substring appears, using the
+        // default timeout.
+        let yaml = script_yaml_with_actions("- Expect: \"__DONE__\"");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse Expect action");
+        assert_eq!(
+            script.actions[0],
+            Action::Expect {
+                text: "__DONE__".to_string(),
+                timeout: DEFAULT_EXPECT_TIMEOUT,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_expect_mapping_overrides_timeout() {
+        // The `{text, timeout}` mapping form overrides the default timeout.
+        let yaml = script_yaml_with_actions("- Expect: {text: \"ready\", timeout: 5.0}");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse Expect mapping");
+        assert_eq!(
+            script.actions[0],
+            Action::Expect {
+                text: "ready".to_string(),
+                timeout: 5.0,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_expect_empty_text_fails() {
+        // An empty expected substring is rejected (it would match immediately).
+        let yaml = script_yaml_with_actions("- Expect: \"\"");
+        let err = serde_yaml::from_str::<Script>(&yaml)
+            .expect_err("empty Expect text should fail to parse");
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn expect_default_serializes_as_bare_scalar() {
+        // A default-timeout Expect serializes to the terse `Expect: substr`
+        // form (a mapping value), not the `{text, timeout}` mapping.
+        let yaml = serde_yaml::to_string(&Action::Expect {
+            text: "__DONE__".to_string(),
+            timeout: DEFAULT_EXPECT_TIMEOUT,
+        })
+        .unwrap();
+        assert!(yaml.contains("Expect"), "unexpected Expect serialization: {yaml}");
+        assert!(!yaml.contains("timeout"), "default timeout should be omitted: {yaml}");
+    }
+
+    #[test]
+    fn parse_inline_comment_scalar_uses_default_show() {
+        // `InlineComment: "# note"` types the note, flashes it, and wipes it,
+        // using the default show duration.
+        let yaml = script_yaml_with_actions("- InlineComment: \"# a note\"");
+        let script: Script =
+            serde_yaml::from_str(&yaml).expect("should parse InlineComment action");
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# a note".to_string(),
+                show: DEFAULT_INLINE_COMMENT_SHOW,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_inline_comment_mapping_overrides_show() {
+        // The `{text, show}` mapping form overrides the default show duration.
+        let yaml =
+            script_yaml_with_actions("- InlineComment: {text: \"# note\", show: 1.5}");
+        let script: Script =
+            serde_yaml::from_str(&yaml).expect("should parse InlineComment mapping");
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# note".to_string(),
+                show: 1.5,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_inline_comment_empty_text_fails() {
+        // An empty note is rejected (nothing to type or wipe).
+        let yaml = script_yaml_with_actions("- InlineComment: \"\"");
+        let err = serde_yaml::from_str::<Script>(&yaml)
+            .expect_err("empty InlineComment text should fail to parse");
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn inline_comment_default_serializes_as_bare_scalar() {
+        // A default-show InlineComment serializes to the terse
+        // `InlineComment: "# note"` form, not the `{text, show}` mapping.
+        let yaml = serde_yaml::to_string(&Action::InlineComment {
+            text: "# a note".to_string(),
+            show: DEFAULT_INLINE_COMMENT_SHOW,
+        })
+        .unwrap();
+        assert!(
+            yaml.contains("InlineComment"),
+            "unexpected InlineComment serialization: {yaml}"
+        );
+        assert!(!yaml.contains("show"), "default show should be omitted: {yaml}");
+    }
+
+    #[test]
     fn parse_wait_negative_seconds_fails() {
         let yaml = script_yaml_with_actions("- Wait: -1.0");
         let err = serde_yaml::from_str::<Script>(&yaml)
@@ -1845,7 +2742,7 @@ actions:
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::End, KeyName::End],
+                keys: vec![KeyName::End.into(), KeyName::End.into()],
             }
         );
     }
@@ -2283,6 +3180,84 @@ actions:
         assert!(
             last_time >= WAIT_SECS,
             "last output time {last_time} should reflect the {WAIT_SECS}s wait"
+        );
+    }
+
+    // Records a script that runs a command which prints a known marker only
+    // after a shell-side delay, with an `Expect` waiting for that marker. The
+    // action AFTER the `Expect` must not run until the marker has appeared, so
+    // both the marker and the text typed afterwards must be present, and the
+    // recording's duration must reflect the shell delay (proving `Expect`
+    // actually blocked rather than racing ahead). Ignored by default because it
+    // depends on a working shell/PTY environment.
+    #[test]
+    #[ignore]
+    fn expect_blocks_until_substring_appears() {
+        const SLEEP_SECS: f64 = 1.0;
+        let script = Script {
+            output_file: "expect.cast".to_string(),
+            start_delay: (0.05, 0.05),
+            end_delay: (0.1, 0.1),
+            typing_delay: (0.0, 0.0),
+            pre_nl_delay: (0.0, 0.0),
+            post_nl_delay: (0.05, 0.05),
+            key_delay: (0.0, 0.0),
+            with_comments: false,
+            comments_at_top: false,
+            actions: vec![
+                // Print the marker only after a shell-side sleep, so a bare
+                // continuation would race it. The `Text` no longer submits on
+                // its own, so an explicit Enter runs the command.
+                Action::Text("sleep 1; echo __MARKER_DONE__".to_string()),
+                Action::Key {
+                    keys: vec![KeyName::Enter.into()],
+                },
+                Action::Expect {
+                    text: "__MARKER_DONE__".to_string(),
+                    timeout: 10.0,
+                },
+                Action::Text("echo after-expect".to_string()),
+                Action::Key {
+                    keys: vec![KeyName::Enter.into()],
+                },
+                Action::Text("exit".to_string()),
+                Action::Key {
+                    keys: vec![KeyName::Enter.into()],
+                },
+            ],
+            filters: vec![],
+            cols: Some(80),
+            rows: Some(24),
+            sudo: None,
+        };
+        let cast = script.run(true, false, None).expect("recording should succeed");
+        let joined: String = cast
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output { data, .. } => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            joined.contains("__MARKER_DONE__"),
+            "the expected marker should be captured: {joined}"
+        );
+        assert!(
+            joined.contains("after-expect"),
+            "the action after Expect should have run: {joined}"
+        );
+        let last_time = cast
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output { time, .. } => Some(*time),
+                _ => None,
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            last_time >= SLEEP_SECS,
+            "duration {last_time} should reflect Expect blocking for the {SLEEP_SECS}s sleep"
         );
     }
 

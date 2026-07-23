@@ -1,0 +1,57 @@
+# Example: a demo of ascii-rat-scribe recording an htop session.
+#
+# When ascii-rat-bard replays this script it drives a shell, runs
+# `ascii-rat-scribe -o htop.yaml --cast htop.cast -- htop`, uses htop for a
+# few seconds, quits it, and lets scribe write the recorded script. In other
+# words, the resulting .cast shows a viewer how you use ascii-rat-scribe to
+# record htop.
+#
+# Play it with:
+#   ascii-rat-bard --watch examples/scribe-records-htop.yaml
+#
+# You need `ascii-rat-scribe` and `htop` on PATH (build the workspace first
+# and put target/release on PATH, or replace `ascii-rat-scribe` below with
+# the full path to the binary).
+
+output_file: "scribe-records-htop.cast"
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 800
+typing_delay_ms: [40, 90]
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+# Comment: actions require comments to be enabled so they are rendered.
+with_comments: true
+
+actions:
+  - Marker: "start the recorder on htop"
+  - Comment: "record an htop session with ascii-rat-scribe"
+  # Launch the recorder, telling it to record htop into htop.yaml / htop.cast.
+  - "ascii-rat-scribe -o htop.yaml --cast htop.cast -- htop"
+  - Enter:
+  # Give htop a moment to draw its full-screen interface.
+  - Wait: 2.0
+
+  - Marker: "look around htop"
+  # Scroll down the process list a little, as a viewer would.
+  - Down: 5
+  - Wait: 1.0
+  - PageDown:
+  - Wait: 1.0
+  - PageUp:
+  - Wait: 1.0
+
+  - Marker: "quit htop"
+  # `q` quits htop, which ends the recorded command and makes scribe write
+  # htop.yaml.
+  - "q"
+  - Wait: 1.5
+
+  - Comment: "scribe has written htop.yaml and htop.cast"
+  - Wait: 1.0
+
+  # Leave the shell that ascii-rat-bard launched us in.
+  - "exit"
+  - Enter:
+  - END_REC:

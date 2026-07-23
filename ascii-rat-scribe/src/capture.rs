@@ -26,6 +26,9 @@ pub struct CaptureOptions {
     pub rows: u16,
     /// Idle gap threshold (milliseconds) for inserting `Wait` actions.
     pub wait_threshold_ms: u64,
+    /// Granularity (milliseconds) to round emitted `Wait` durations to. `0`
+    /// disables rounding.
+    pub wait_round_ms: u64,
 }
 
 /// Restores the terminal to cooked mode when dropped.
@@ -65,6 +68,12 @@ pub fn record(options: &CaptureOptions) -> Result<Vec<Action>> {
     if let Ok(term) = std::env::var("TERM") {
         cmd.env("TERM", term);
     }
+    // Start the child in our own current directory. Without this, portable-pty
+    // spawns the child in the user's home directory rather than where the
+    // recorder was launched from, so relative paths would resolve unexpectedly.
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
 
     // Enter raw mode; restored automatically on any exit path.
     let _guard = RawModeGuard::enable()?;
@@ -72,7 +81,7 @@ pub fn record(options: &CaptureOptions) -> Result<Vec<Action>> {
     let mut session = PtySession::spawn(cmd, options.cols, options.rows)
         .context("failed to spawn command in PTY")?;
 
-    let mut decoder = Decoder::new(options.wait_threshold_ms);
+    let mut decoder = Decoder::new(options.wait_threshold_ms, options.wait_round_ms);
     let stdin_rx = spawn_stdin_reader();
     let mut stdout = std::io::stdout();
 

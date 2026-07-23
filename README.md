@@ -10,6 +10,34 @@ write the script by hand, and then replay that script deterministically to
 produce a clean `.cast` file. The replay drives a real child process inside a
 PTY, so full-screen TUIs render correctly and commands that need `sudo` work.
 
+## Demo
+
+`ascii-rat` recording itself, one level at a time — each recording captures the
+level below it. Click any thumbnail to play it on asciinema.org.
+
+### Level 0 — recording the whole thing by hand
+
+A live session (driven by the commands in
+[`examples/level0.cmds`](examples/level0.cmds)) that runs the level 1 demo and
+records it with plain `asciinema rec`.
+
+[![asciicast](https://asciinema.org/a/BkW0a6aIhM5Ah7WM.svg)](https://asciinema.org/a/BkW0a6aIhM5Ah7WM)
+
+### Level 1 — the demo-ception script
+
+[`examples/demo-ception.yaml`](examples/demo-ception.yaml) replayed with
+`ascii-rat-bard`: it drives `ascii-rat-scribe` to record a new script, edits it
+in `nano`, then replays the edited script with `ascii-rat-bard`.
+
+[![asciicast](https://asciinema.org/a/zDCfG1zq4Aq8jpiy.svg)](https://asciinema.org/a/zDCfG1zq4Aq8jpiy)
+
+### Level 2 — the script recorded during the demo
+
+The innermost recording — `level2.yaml` — captured by `ascii-rat-scribe` and
+replayed by `ascii-rat-bard` from inside the level 1 demo.
+
+[![asciicast](https://asciinema.org/a/y8ERCBkab4y80AYX.svg)](https://asciinema.org/a/y8ERCBkab4y80AYX)
+
 ## Structure
 
 The project is a Cargo workspace of three crates:
@@ -41,7 +69,7 @@ scribe who records what happens, and the bard who performs it back.
 
 ## Building
 
-You need a recent stable [Rust toolchain](https://rustup.rs/) (edition 2021).
+You need a recent stable [Rust toolchain](https://rustup.rs/) (edition 2024).
 
 Build everything in the workspace:
 
@@ -77,10 +105,12 @@ cargo test
 the idle gaps between keystrokes — into a `demo.yaml` script.
 
 ```
-ascii-rat-scribe [OPTIONS] -- <command> [args...]
+ascii-rat-scribe [OPTIONS] [-- <command> [args...]]
 ```
 
-Everything after `--` is the command line to run and record.
+Everything after `--` is the command line to run and record. If you omit the
+command entirely, `ascii-rat-scribe` records `bash`, giving you a clean terminal
+you can type into.
 
 Key options:
 
@@ -88,9 +118,37 @@ Key options:
 | --- | --- | --- |
 | `-o`, `--output <FILE>` | `demo.yaml` | Where to write the produced script. |
 | `--cast <FILE>` | `demo.cast` | The `output_file` recorded into the script (the `.cast` that `ascii-rat-bard` will later produce). |
-| `--wait-threshold-ms <MS>` | `400` | Idle time after which a gap becomes an explicit `Wait` action. |
+| `--wait-threshold-ms <MS>` | `500` | Idle time after which a gap becomes an explicit `Wait` action. |
+| `--round-wait-ms <MS>` | `500` | Round each recorded `Wait` to the nearest this many milliseconds. `0` keeps millisecond-precise waits. |
 | `--typing-delay-ms <MS>` | `75` | `typing_delay_ms` written into the script header. |
 | `--cols <N>` / `--rows <N>` | current terminal | PTY size to record at. |
+
+#### Controlling how idle gaps become `Wait` actions
+
+Two flags control how the pauses in your recording are turned into `Wait`
+actions in the script:
+
+`--wait-threshold-ms` sets the minimum gap that is recorded at all (the
+"min-timeout"). Any idle pause shorter than this is ignored, so quick pauses
+between keystrokes do not clutter the script with tiny waits; only gaps of at
+least this many milliseconds become a `Wait`. It defaults to `500` (matching the
+default rounding). Lower it to capture shorter pauses, or raise it to record only
+the longer, deliberate ones:
+
+```bash
+ascii-rat-scribe --wait-threshold-ms 1000 -- htop   # only record pauses of 1s+
+```
+
+`--round-wait-ms` snaps each recorded `Wait` to the nearest multiple of the
+given number of milliseconds, so the script reads in tidy, predictable steps
+rather than values like `1.732`. It defaults to `500` (round to the nearest half
+second): a 1.7s pause is written as `Wait: 1.5`. Change the granularity, or pass
+`0` to disable rounding and keep the exact millisecond-precise waits:
+
+```bash
+ascii-rat-scribe --round-wait-ms 1000 -- htop       # round waits to whole seconds
+ascii-rat-scribe --round-wait-ms 0 -- htop          # keep exact waits, no rounding
+```
 
 Example — capture an interactive `htop` session:
 
@@ -106,7 +164,14 @@ timings before handing it to `ascii-rat-bard`.
 
 `ascii-rat-scribe` records whatever command you put after `--`. To get a blank
 prompt you can freely type any commands into — rather than a single fixed
-program like `htop` — record a shell as the command:
+program like `htop` — record a shell as the command. Because `bash` is the
+default, running the recorder with no command at all does exactly this:
+
+```bash
+ascii-rat-scribe
+```
+
+which is equivalent to naming the shell explicitly:
 
 ```bash
 ascii-rat-scribe -o session.yaml --cast session.cast -- bash
@@ -157,10 +222,10 @@ Key options:
 | `-m`, `--print-markers` | Print the cast's markers as a Markdown list. |
 | `--data-id <ID>` | HTML element id to associate with the marker list (used with `--print-markers`). |
 
-Example — record the demo script shipped in this repo and watch it happen:
+Example — replay one of the scripts shipped in this repo and watch it happen:
 
 ```bash
-ascii-rat-bard --watch demo.yaml
+ascii-rat-bard --watch examples/hello-world.yaml
 ```
 
 If the script has a top-level `sudo:` block, `ascii-rat-bard` prompts once for
@@ -174,9 +239,65 @@ Play the finished recording back with any asciicast player, e.g.:
 asciinema play demo.cast
 ```
 
+#### Recording commands that need `sudo`
+
+Full-screen setup tools and system commands often need root, and typing a
+password by hand ruins a scripted, reproducible recording. `ascii-rat` handles
+this for you: add a top-level `sudo:` field to the script and `ascii-rat-bard`
+takes care of the password prompt while it records.
+
+How it works:
+
+- Before recording starts, `ascii-rat-bard` asks you once for the password with
+  a hidden prompt (`Sudo password:`). This needs an interactive terminal.
+- While recording, it watches the child's output; when a sudo password prompt
+  appears it types the password (character by character) followed by Enter, so
+  the recording flows as if a person answered the prompt.
+- The password is never written to the script or the `.cast`. It only lives in
+  memory for the duration of the run.
+- By default it matches the standard prompts (the substrings `assword` and
+  `[sudo]`, case-insensitively). If your prompt is unusual, give `sudo:` a
+  mapping with your own `prompts:` list instead of `true` (see the script format
+  below).
+
+A minimal `sudo whoami` script (this is [`examples/sudo-command.yaml`](examples/sudo-command.yaml)):
+
+```yaml
+output_file: "sudo-whoami.cast"
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 500
+typing_delay_ms: [30, 70]
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+with_comments: true          # so the Comment: line below is rendered
+sudo: true                   # ask for the password once, type it at the prompt
+
+actions:
+  - Comment: "run a privileged command with sudo"
+  - "sudo whoami"
+  - Enter:
+  - Wait: 2.0                 # let sudo prompt, accept the password, print `root`
+  - "exit"
+  - Enter:
+  - END_REC:
+```
+
+Record it, entering your password at the hidden prompt when asked:
+
+```bash
+ascii-rat-bard --watch examples/sudo-command.yaml
+```
+
+The resulting cast shows `sudo whoami` being run and printing `root`, with no
+password visible anywhere in the recording.
+
 ## The script format (`demo.yaml`)
 
-A script has a small header followed by a list of `actions`. Here is a minimal
+A script has a small header followed by a list of `actions`. This section walks
+through the common forms; for an exhaustive reference of every header field,
+action, and filter keyword see [`format.md`](format.md). Here is a minimal
 hand-written example:
 
 ```yaml
@@ -205,11 +326,57 @@ Notable action forms:
 - **`Marker:`** → an asciicast marker (chapter point); list them with
   `ascii-rat-bard --dont-run --print-markers`.
 - **`Comment:`** → a caption/comment event.
+- **`InlineComment:`** → type a note on screen, flash it, then wipe the line with
+  `Ctrl-U` — a shortcut for the `Text + Wait + Ctrl-U + Wait` pattern (unlike
+  `Comment:`, it is really typed into the terminal). See [`format.md`](format.md#inlinecomment).
 - **A named key** (`Enter:`, `Esc:`, `Down:`, `Tab:`, …) → one keypress; add a
-  count to repeat it (`Down: 6`, `Esc: 2`).
-- **`Keys: [Down, Enter]`** → send several named keys once each, in order.
+  count to repeat it (`Down: 6`, `Esc: 2`). See [`keys.md`](keys.md) for the full
+  list of special key names (and aliases such as `PgDn`).
+- **A modifier combo** (`Ctrl-C:`, `Ctrl-U:`, `Shift-Tab:`, `Ctrl-Shift-Right:`,
+  `Alt-x:`) → one keypress with modifiers held. Join `Ctrl`/`Alt`/`Shift` to the
+  key with `-` (any order, case-insensitive); see [`keys.md`](keys.md#modifier-combinations).
+- **`Keys: [Down, Enter]`** → send several named keys once each, in order (combos
+  work here too, e.g. `Keys: [Ctrl-O, Enter, Ctrl-X]`).
 - **`Wait: <seconds>`** → pause while still capturing the child's output.
+- **`Expect: "<substr>"`** → block until that substring appears in the child's
+  output, then continue (see below). A synchronization primitive: wait for what
+  the terminal actually prints instead of guessing a fixed `Wait`.
 - **`END_REC:`** → end the recording; anything after it is ignored.
+
+#### Waiting for output with `Expect`
+
+`Expect` pauses the script until an expected substring shows up in the child's
+output, then continues. Matching is case-insensitive, and everything printed
+while waiting is still captured into the cast (and, under `--watch`, mirrored to
+your terminal live as it arrives, so a long `Expect` shows the child's output as
+it happens rather than freezing and dumping it all at once when the match lands).
+If the substring never appears the script gives up after a timeout (default 30
+seconds) rather than hanging forever.
+
+Use it whenever the next action must not run until something has actually
+happened on screen — for example waiting for a long command to finish, a prompt
+to return, or a nested `ascii-rat-bard` replay to complete. Unlike a fixed
+`Wait`, it synchronizes on real output, so it never races ahead when a step
+takes longer (or fires early when it is quick):
+
+```yaml
+- "ascii-rat-bard --watch level2.yaml; echo __DONE__"
+- Enter:
+- Expect: "__DONE__"   # continue only once the marker is printed
+- "next command"
+```
+
+To override the timeout, use the mapping form:
+
+```yaml
+- Expect: { text: "Server started", timeout: 60 }
+```
+
+`Expect` only watches output produced after it begins, so it deliberately
+ignores the terminal's echo of the command line that triggered it (the typed
+`... ; echo __DONE__` contains `__DONE__` before the command has run). Put the
+`Expect` after the `Enter` that submits the command whose output you are waiting
+for.
 
 Timing/header fields:
 
@@ -218,9 +385,65 @@ Timing/header fields:
 - Each delay can be spelled in seconds (`typing_delay:`) or milliseconds
   (`typing_delay_ms:`) — use one, not both.
 - Available delays: `start_delay`, `end_delay`, `typing_delay`, `pre_nl_delay`,
-  `post_nl_delay`, `key_delay` (each also has a `_ms` form).
-- `sudo:` accepts `true` (use the built-in prompt matchers) or a mapping with a
-  custom `prompts:` list.
+  `post_nl_delay`, `key_delay` (each also has a `_ms` form). `key_delay` is the
+  pause after each keypress sent by a `Key`/`Keys` action.
+- `with_comments:` renders `Comment` actions as captions (off by default);
+  `comments_at_top:` anchors those captions at the top of the screen instead of
+  the bottom.
+- `filters:` is an optional list of post-processing passes (regex scrubbing,
+  trimming to a start/end marker) — see [`format.md`](format.md#filters).
+- `sudo:` enables sudo password handling. Use `true` to match the built-in
+  prompts (`assword`, `[sudo]`), or a mapping with a custom `prompts:` list when
+  your prompt differs, e.g.:
 
-See [`demo.yaml`](demo.yaml) in the repository root for a full, real-world
-example (the original `snap-rat` demo).
+  ```yaml
+  sudo:
+    prompts:
+      - "Password:"
+      - "authentication required"
+  ```
+
+  Either way, `ascii-rat-bard` asks for the password once (hidden) at record
+  time and types it when a listed prompt appears; see the sudo subsection above.
+
+For a complete reference of every header field and action form, see
+[`format.md`](format.md). See the [`examples/`](examples) directory for full,
+ready-to-run scripts.
+
+## Examples
+
+The [`examples/`](examples) directory holds small, ready-to-run scripts you can
+replay with `ascii-rat-bard`, each documented in [`examples/README.md`](examples/README.md):
+
+| Script | What it shows |
+| --- | --- |
+| [`hello-world.yaml`](examples/hello-world.yaml) | The smallest useful script — type two commands into a `bash` prompt and exit. |
+| [`sudo-command.yaml`](examples/sudo-command.yaml) | A privileged command via `sudo: true`, with the password typed at the sudo prompt. |
+| [`scribe-records-htop.yaml`](examples/scribe-records-htop.yaml) | A meta-demo whose replay drives `ascii-rat-scribe` recording an `htop` session. |
+| [`demo-ception.yaml`](examples/demo-ception.yaml) | The flagship "demo-ception": records a new script with `ascii-rat-scribe`, edits it in `nano`, and replays it with `ascii-rat-bard`, all in one cast. |
+
+Play any of them, for example:
+
+```bash
+ascii-rat-bard --watch examples/hello-world.yaml
+```
+
+### The flagship demo (`demo-ception.yaml`)
+
+The [`examples/`](examples) directory holds
+[`demo-ception.yaml`](examples/demo-ception.yaml), the flagship "demo-ception"
+demo: a single recording that shows the whole `ascii-rat` workflow end to end,
+inside one cast. When replayed it drives a shell and, on screen, uses
+`ascii-rat` itself to record a new script with `ascii-rat-scribe`, edit that
+script by hand in `nano`, and replay the edited script with `ascii-rat-bard` —
+a demo of making a demo.
+
+```bash
+ascii-rat-bard --watch examples/demo-ception.yaml
+```
+
+It needs `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` on `PATH`, and writes
+its inner recording to `level2.yaml` / `level2.cast` in whatever
+directory you run it from (both safe to delete). It also shows off modifier keys
+such as `Ctrl-O`, `Ctrl-X`, and `Ctrl-End` to drive the editor — see
+[`keys.md`](keys.md).

@@ -23,6 +23,13 @@ pub enum Filter {
     StartMarker { start_label: String },
     EndMarker { end_label: String },
     Comment,
+    /// Drop any `Comment` events entirely (used when comments are disabled).
+    ///
+    /// `Comment` is an internal-only event that cannot be serialized, so a
+    /// script that carries a `Comment` action while comments are disabled must
+    /// still have those events removed before saving — otherwise the cast fails
+    /// to save. This filter does that stripping without rendering any overlay.
+    StripComments,
 }
 
 impl Filter {
@@ -106,6 +113,13 @@ impl Filter {
                         other => new_events.push(other),
                     }
                 }
+                Ok(new_events)
+            }
+            Filter::StripComments => {
+                let new_events = events
+                    .into_iter()
+                    .filter(|event| !matches!(event, Event::Comment { .. }))
+                    .collect();
                 Ok(new_events)
             }
         }
@@ -210,6 +224,7 @@ impl<'de> Deserialize<'de> for Filter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cast::AsciiCast;
 
     #[test]
     fn deserialize_end_marker_filter() {
@@ -416,6 +431,34 @@ mod tests {
         let filtered = Filter::Comment.apply(&header, events).unwrap();
         // The pre-comment output is unchanged (no overlay appended).
         assert_eq!(output_data(&filtered[0]), "boot");
+    }
+
+    #[test]
+    fn strip_comments_removes_comment_events() {
+        let header = Header::new(20, 10);
+        let events = vec![
+            out(0.0, "boot"),
+            comment(0.5, true, "edited by hand in nano"),
+            out(1.0, "more"),
+        ];
+        let filtered = Filter::StripComments.apply(&header, events).unwrap();
+        // Only the two output events survive; the comment is dropped, and the
+        // surviving output is left untouched (no overlay appended).
+        assert_eq!(filtered, vec![out(0.0, "boot"), out(1.0, "more")]);
+    }
+
+    #[test]
+    fn strip_comments_leaves_serializable_events() {
+        // A script carrying a Comment while comments are disabled must be
+        // strippable so the resulting cast can actually be saved (a Comment
+        // event cannot be serialized and would otherwise crash the save).
+        let header = Header::new(20, 10);
+        let events = vec![comment(0.0, true, "note"), out(1.0, "hi")];
+        let cast = AsciiCast::new(header, events)
+            .filter_events(&[Filter::StripComments])
+            .unwrap();
+        // No Comment events remain, so serialization succeeds.
+        assert!(cast.to_lines().is_ok());
     }
 
     #[test]

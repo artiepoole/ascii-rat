@@ -33,11 +33,11 @@ fn main() -> anyhow::Result<()> {
         actions: vec![
             Action::Text(stub),
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             },
             Action::Text("exit".to_string()),
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             },
         ],
         filters: vec![],

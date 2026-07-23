@@ -1,0 +1,31 @@
+# Example: a command that needs a sudo password.
+#
+# With `sudo: true`, ascii-rat-bard asks you once (hidden) for the sudo
+# password before recording starts, then types it into the child whenever a
+# sudo password prompt appears. The password is never written to the script
+# or the .cast.
+#
+# Play it with:
+#   ascii-rat-bard --watch examples/sudo-command.yaml
+
+output_file: "sudo-command.cast"
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 500
+typing_delay_ms: [30, 70]
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+# Comment: actions require comments to be enabled so they are rendered.
+with_comments: true
+sudo: true
+
+actions:
+  - Comment: "run a privileged command with sudo"
+  - "sudo whoami"
+  - Enter:
+  # Give sudo time to prompt, accept the password, and print `root`.
+  - Wait: 2.0
+  - "exit"
+  - Enter:
+  - END_REC:
