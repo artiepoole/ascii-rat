@@ -68,6 +68,12 @@ pub fn record(options: &CaptureOptions) -> Result<Vec<Action>> {
     if let Ok(term) = std::env::var("TERM") {
         cmd.env("TERM", term);
     }
+    // Start the child in our own current directory. Without this, portable-pty
+    // spawns the child in the user's home directory rather than where the
+    // recorder was launched from, so relative paths would resolve unexpectedly.
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
 
     // Enter raw mode; restored automatically on any exit path.
     let _guard = RawModeGuard::enable()?;
