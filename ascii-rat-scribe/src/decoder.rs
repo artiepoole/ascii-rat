@@ -25,6 +25,9 @@ const MAX_KEY_LEN: usize = 4;
 pub struct Decoder {
     /// Idle gap at or above which a `Wait` is emitted before the next action.
     wait_threshold: Duration,
+    /// Granularity (milliseconds) to round emitted `Wait` durations to. `0`
+    /// disables rounding (waits keep their millisecond-precise value).
+    wait_round_ms: u64,
     /// Bytes seen but not yet resolved into an action (a pending escape run or
     /// an incomplete UTF-8 tail).
     pending: Vec<u8>,
@@ -41,10 +44,12 @@ pub struct Decoder {
 
 impl Decoder {
     /// Create a decoder that inserts a `Wait` when the idle gap reaches
-    /// `wait_threshold_ms` milliseconds.
-    pub fn new(wait_threshold_ms: u64) -> Decoder {
+    /// `wait_threshold_ms` milliseconds, rounding each emitted `Wait` to the
+    /// nearest `wait_round_ms` milliseconds (`0` disables rounding).
+    pub fn new(wait_threshold_ms: u64, wait_round_ms: u64) -> Decoder {
         Decoder {
             wait_threshold: Duration::from_millis(wait_threshold_ms),
+            wait_round_ms,
             pending: Vec::new(),
             text: String::new(),
             last_input: None,
@@ -87,12 +92,24 @@ impl Decoder {
     /// human-authored script reads.
     fn note_gap(&mut self, seconds: f64) {
         self.flush_text();
-        // Round to milliseconds for a tidy script.
-        let rounded = (seconds * 1000.0).round() / 1000.0;
+        let rounded = self.round_wait(seconds);
         self.pending_wait = Some(match self.pending_wait.take() {
             Some(existing) => existing + rounded,
             None => rounded,
         });
+    }
+
+    /// Round an idle gap (seconds) for a tidy script. When `wait_round_ms` is
+    /// set, the gap snaps to the nearest multiple of that many milliseconds;
+    /// otherwise it is only trimmed to millisecond precision.
+    fn round_wait(&self, seconds: f64) -> f64 {
+        if self.wait_round_ms == 0 {
+            // Trim to millisecond precision for a tidy script.
+            return (seconds * 1000.0).round() / 1000.0;
+        }
+        let ms = seconds * 1000.0;
+        let step = self.wait_round_ms as f64;
+        (ms / step).round() * step / 1000.0
     }
 
     /// Attempt to resolve the `pending` buffer into one or more actions.
@@ -272,7 +289,7 @@ mod tests {
     #[test]
     fn printable_chars_collapse_into_one_text_action() {
         let base = Instant::now();
-        let mut d = Decoder::new(10_000);
+        let mut d = Decoder::new(10_000, 0);
         d.feed(b"ls", at(base, 0));
         let actions = d.finish();
         assert_eq!(actions, vec![Action::Text("ls".to_string())]);
@@ -281,7 +298,7 @@ mod tests {
     #[test]
     fn enter_flushes_text_and_becomes_key() {
         let base = Instant::now();
-        let mut d = Decoder::new(10_000);
+        let mut d = Decoder::new(10_000, 0);
         d.feed(b"ls", at(base, 0));
         d.feed(b"\r", at(base, 1));
         let actions = d.finish();
@@ -299,7 +316,7 @@ mod tests {
     #[test]
     fn line_feed_is_treated_as_enter() {
         let base = Instant::now();
-        let mut d = Decoder::new(10_000);
+        let mut d = Decoder::new(10_000, 0);
         d.feed(b"hi\n", at(base, 0));
         let actions = d.finish();
         assert_eq!(
@@ -316,7 +333,7 @@ mod tests {
     #[test]
     fn arrow_escape_sequence_becomes_key() {
         let base = Instant::now();
-        let mut d = Decoder::new(10_000);
+        let mut d = Decoder::new(10_000, 0);
         // SS3 Down: ESC O B
         d.feed(b"\x1bOB", at(base, 0));
         let actions = d.finish();
@@ -331,7 +348,7 @@ mod tests {
     #[test]
     fn partial_escape_across_reads_decodes_to_one_key() {
         let base = Instant::now();
-        let mut d = Decoder::new(10_000);
+        let mut d = Decoder::new(10_000, 0);
         // Delete is ESC [ 3 ~ split across three reads.
         d.feed(b"\x1b", at(base, 0));
         d.feed(b"[3", at(base, 1));
@@ -348,7 +365,7 @@ mod tests {
     #[test]
     fn idle_gap_becomes_wait_between_actions() {
         let base = Instant::now();
-        let mut d = Decoder::new(400);
+        let mut d = Decoder::new(400, 0);
         d.feed(b"a", at(base, 0));
         // 1s gap before the next key.
         d.feed(b"\r", at(base, 1000));
@@ -366,9 +383,29 @@ mod tests {
     }
 
     #[test]
+    fn wait_is_rounded_to_nearest_step() {
+        let base = Instant::now();
+        // Round to the nearest 500ms: a 1.7s gap snaps to 1.5s.
+        let mut d = Decoder::new(400, 500);
+        d.feed(b"a", at(base, 0));
+        d.feed(b"\r", at(base, 1700));
+        let actions = d.finish();
+        assert_eq!(
+            actions,
+            vec![
+                Action::Text("a".to_string()),
+                Action::Wait { seconds: 1.5 },
+                Action::Key {
+                    keys: vec![KeyName::Enter]
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn full_sequence_ls_enter_wait_down() {
         let base = Instant::now();
-        let mut d = Decoder::new(400);
+        let mut d = Decoder::new(400, 0);
         d.feed(b"ls", at(base, 0));
         d.feed(b"\r", at(base, 10));
         // long gap
@@ -392,7 +429,7 @@ mod tests {
     #[test]
     fn lone_esc_is_decoded_when_no_longer_match_follows() {
         let base = Instant::now();
-        let mut d = Decoder::new(10_000);
+        let mut d = Decoder::new(10_000, 0);
         // ESC followed by a printable 'x' (not a known escape sequence): the
         // ESC becomes an Esc key and 'x' becomes text.
         d.feed(b"\x1bxyz", at(base, 0));

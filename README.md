@@ -88,9 +88,37 @@ Key options:
 | --- | --- | --- |
 | `-o`, `--output <FILE>` | `demo.yaml` | Where to write the produced script. |
 | `--cast <FILE>` | `demo.cast` | The `output_file` recorded into the script (the `.cast` that `ascii-rat-bard` will later produce). |
-| `--wait-threshold-ms <MS>` | `400` | Idle time after which a gap becomes an explicit `Wait` action. |
+| `--wait-threshold-ms <MS>` | `500` | Idle time after which a gap becomes an explicit `Wait` action. |
+| `--round-wait-ms <MS>` | `500` | Round each recorded `Wait` to the nearest this many milliseconds. `0` keeps millisecond-precise waits. |
 | `--typing-delay-ms <MS>` | `75` | `typing_delay_ms` written into the script header. |
 | `--cols <N>` / `--rows <N>` | current terminal | PTY size to record at. |
+
+#### Controlling how idle gaps become `Wait` actions
+
+Two flags control how the pauses in your recording are turned into `Wait`
+actions in the script:
+
+`--wait-threshold-ms` sets the minimum gap that is recorded at all (the
+"min-timeout"). Any idle pause shorter than this is ignored, so quick pauses
+between keystrokes do not clutter the script with tiny waits; only gaps of at
+least this many milliseconds become a `Wait`. It defaults to `500` (matching the
+default rounding). Lower it to capture shorter pauses, or raise it to record only
+the longer, deliberate ones:
+
+```bash
+ascii-rat-scribe --wait-threshold-ms 1000 -- htop   # only record pauses of 1s+
+```
+
+`--round-wait-ms` snaps each recorded `Wait` to the nearest multiple of the
+given number of milliseconds, so the script reads in tidy, predictable steps
+rather than values like `1.732`. It defaults to `500` (round to the nearest half
+second): a 1.7s pause is written as `Wait: 1.5`. Change the granularity, or pass
+`0` to disable rounding and keep the exact millisecond-precise waits:
+
+```bash
+ascii-rat-scribe --round-wait-ms 1000 -- htop       # round waits to whole seconds
+ascii-rat-scribe --round-wait-ms 0 -- htop          # keep exact waits, no rounding
+```
 
 Example — capture an interactive `htop` session:
 

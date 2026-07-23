@@ -31,8 +31,13 @@ struct Cli {
     cast: String,
 
     /// Idle time (milliseconds) after which a gap becomes a `Wait` action.
-    #[arg(long = "wait-threshold-ms", default_value_t = 400)]
+    #[arg(long = "wait-threshold-ms", default_value_t = 500)]
     wait_threshold_ms: u64,
+
+    /// Round each recorded `Wait` to the nearest this many milliseconds, for a
+    /// tidier script. Set to `0` to keep millisecond-precise waits.
+    #[arg(long = "round-wait-ms", default_value_t = 500)]
+    round_wait_ms: u64,
 
     /// PTY width in columns (defaults to the current terminal size).
     #[arg(long = "cols")]
@@ -74,6 +79,7 @@ fn run(cli: Cli) -> Result<()> {
         cols,
         rows,
         wait_threshold_ms: cli.wait_threshold_ms,
+        wait_round_ms: cli.round_wait_ms,
     };
 
     let actions = capture::record(&options)?;
