@@ -25,3 +25,17 @@ be bold.
 Using bold only for headings keeps documents scannable: bold reliably signals
 "this is a label", not "this is important". Overusing bold for emphasis makes the
 real headings harder to spot and clutters the text.
+
+# Committing
+
+Create a separate commit for each change. A "change" is one self-contained,
+logically distinct piece of work (a feature, a fix, a documentation update).
+
+Each commit must only ever include the files that belong to that change.
+Never stage or commit unrelated files just because they happen to be modified in
+the working tree. In practice this means committing named files explicitly (for
+example `git commit <file>...` or `git add <file>...` followed by `git commit`)
+rather than sweeping everything in with `git commit -a` or `git add .`.
+
+If you have made several unrelated changes at once, split them into one commit
+per change, each staging only its own files.
