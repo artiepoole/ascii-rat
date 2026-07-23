@@ -56,6 +56,18 @@ actions:
   - "actions:"
   - Enter:
   - Wait: 0.5
+  # The recorded level2.yaml has no `with_comments`, so its Comment actions
+  # would be stripped and never render. Insert `with_comments: true` on the
+  # line just above `actions:` so the replayed level2 actually shows captions.
+  - Home:
+  - Wait: 0.3
+  - Enter:
+  - Up:
+  - Wait: 0.3
+  - "with_comments: true"
+  - Wait: 1.0
+  # Now jump back down to `actions:` and add the demo edits after it.
+  - Down:
   - End:
   - Wait: 0.3
   - Enter:
@@ -82,7 +94,7 @@ actions:
   # ---------------------------------------------------------------------------
   - Marker: "record the edited script"
   - Comment: "step 3: record level2.yaml with ascii-rat-bard"
-  - InlineComment: "# now replay the recorded script, using `Expect:` to wait for __DONE__ before we continue"
+  - InlineComment: "# now run the recorded script, using `Expect:` to wait for __DONE__ before we continue"
   - "ascii-rat-bard --watch level2.yaml; echo __DONE__"
   - Enter:
   - Expect: "__DONE__"

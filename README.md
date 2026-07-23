@@ -21,22 +21,22 @@ A live session (driven by the commands in
 [`examples/level0.cmds`](examples/level0.cmds)) that runs the level 1 demo and
 records it with plain `asciinema rec`.
 
-[![asciicast](https://asciinema.org/a/BkW0a6aIhM5Ah7WM.svg)](https://asciinema.org/a/BkW0a6aIhM5Ah7WM)
+[![asciicast](https://asciinema.org/a/1261455.svg)](https://asciinema.org/a/1261455)
 
 ### Level 1 — the demo-ception script
 
-[`examples/demo-ception.yaml`](examples/demo-ception.yaml) replayed with
+[`examples/level1.yaml`](examples/level1.yaml) replayed with
 `ascii-rat-bard`: it drives `ascii-rat-scribe` to record a new script, edits it
 in `nano`, then replays the edited script with `ascii-rat-bard`.
 
-[![asciicast](https://asciinema.org/a/zDCfG1zq4Aq8jpiy.svg)](https://asciinema.org/a/zDCfG1zq4Aq8jpiy)
+[![asciicast](https://asciinema.org/a/1261456.svg)](https://asciinema.org/a/1261456)
 
 ### Level 2 — the script recorded during the demo
 
 The innermost recording — `level2.yaml` — captured by `ascii-rat-scribe` and
 replayed by `ascii-rat-bard` from inside the level 1 demo.
 
-[![asciicast](https://asciinema.org/a/y8ERCBkab4y80AYX.svg)](https://asciinema.org/a/y8ERCBkab4y80AYX)
+[![asciicast](https://asciinema.org/a/1261457.svg)](https://asciinema.org/a/1261457)
 
 ## Structure
 
