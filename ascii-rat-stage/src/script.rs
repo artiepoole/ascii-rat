@@ -85,7 +85,11 @@ pub enum Action {
     /// (send each named key once, in order). Both are normalized into this
     /// flattened list of keys. The dedicated `key_delay` is slept after each
     /// keypress.
-    Key { keys: Vec<KeyName> },
+    ///
+    /// Each entry is a [`Key`] — a base [`KeyName`] plus any modifiers (Ctrl,
+    /// Alt, Shift), so a combo such as `Ctrl-C` or `Ctrl-Shift-Right` is a
+    /// single keypress.
+    Key { keys: Vec<Key> },
     /// Pauses the recording for `seconds` (capturing output during the pause).
     Wait { seconds: f64 },
     /// Ends the recording at this point (the `END_REC:` action).
@@ -107,7 +111,7 @@ impl Action {
             Action::Marker { label } => format!("marker {label:?}"),
             Action::Comment { comment } => format!("comment {comment:?}"),
             Action::Key { keys } => {
-                let names: Vec<&str> = keys.iter().map(|k| k.label()).collect();
+                let names: Vec<String> = keys.iter().map(|k| k.label()).collect();
                 format!("key {}", names.join(" "))
             }
             Action::Wait { seconds } => format!("wait {seconds}s"),
@@ -136,6 +140,10 @@ pub enum KeyName {
     PageUp,
     PageDown,
     Space,
+    /// A single printable character used as the base of a modifier combo (e.g.
+    /// the `c` in `Ctrl-C`). It is never produced by [`KeyName::parse`] and is
+    /// not one of the [`KeyName::ALL`] named keys; only [`Key`] constructs it.
+    Char(char),
 }
 
 impl KeyName {
@@ -178,6 +186,9 @@ impl KeyName {
             KeyName::PageUp => "PageUp",
             KeyName::PageDown => "PageDown",
             KeyName::Space => "Space",
+            // `Char` is only ever used as the base of a modifier combo and is
+            // rendered by [`Key::label`], which handles it before delegating.
+            KeyName::Char(_) => unreachable!("KeyName::Char has no static label"),
         }
     }
 
@@ -201,6 +212,8 @@ impl KeyName {
             KeyName::PageUp => b"\x1b[5~",
             KeyName::PageDown => b"\x1b[6~",
             KeyName::Space => b" ",
+            // `Char` bytes are produced by [`Key::bytes`], not here.
+            KeyName::Char(_) => unreachable!("KeyName::Char has no static bytes"),
         }
     }
 
@@ -234,6 +247,393 @@ impl KeyName {
     /// match. This exact-match lookup only returns `Esc` for a lone `\x1b`.
     pub fn from_bytes(seq: &[u8]) -> Option<KeyName> {
         KeyName::ALL.into_iter().find(|k| k.bytes() == seq)
+    }
+
+    /// Whether this key is one of the cursor/navigation keys whose modified
+    /// form uses the xterm CSI-with-parameter encoding (`ESC [ 1 ; <p> A`,
+    /// `ESC [ 5 ; <p> ~`, …). The arrows use the SS3 form only when unmodified.
+    fn is_csi_nav(self) -> bool {
+        matches!(
+            self,
+            KeyName::Up
+                | KeyName::Down
+                | KeyName::Left
+                | KeyName::Right
+                | KeyName::Home
+                | KeyName::End
+                | KeyName::PageUp
+                | KeyName::PageDown
+                | KeyName::Delete
+        )
+    }
+}
+
+/// A set of keyboard modifiers held while a key is pressed.
+///
+/// `Ctrl`, `Alt`, and `Shift` compose freely (e.g. `Ctrl-Shift-Right`). An
+/// empty set means the key is pressed on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+impl Mods {
+    /// No modifiers held.
+    pub const NONE: Mods = Mods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+    };
+
+    fn is_empty(self) -> bool {
+        !self.ctrl && !self.alt && !self.shift
+    }
+
+    /// The xterm modifier parameter used in CSI-with-parameter sequences:
+    /// `1 + (shift?1) + (alt?2) + (ctrl?4)` (so plain is `1`, Shift is `2`,
+    /// Ctrl is `5`, Ctrl-Shift is `6`, …).
+    fn csi_param(self) -> u8 {
+        1 + (self.shift as u8) + 2 * (self.alt as u8) + 4 * (self.ctrl as u8)
+    }
+
+    /// Recover a modifier set from a CSI parameter (the inverse of
+    /// [`Mods::csi_param`]). Returns `None` for an out-of-range value.
+    fn from_csi_param(param: u8) -> Option<Mods> {
+        if !(1..=8).contains(&param) {
+            return None;
+        }
+        let bits = param - 1;
+        Some(Mods {
+            shift: bits & 1 != 0,
+            alt: bits & 2 != 0,
+            ctrl: bits & 4 != 0,
+        })
+    }
+}
+
+/// A single keypress: a base [`KeyName`] plus any held [`Mods`].
+///
+/// A plain key (no modifiers) behaves exactly like the underlying [`KeyName`]
+/// did before modifiers existed, so existing scripts and casts are unaffected.
+/// Modified combos (`Ctrl-C`, `Alt-x`, `Shift-Tab`, `Ctrl-Shift-Right`, …)
+/// compute their byte sequence from the base key and the modifier set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Key {
+    pub name: KeyName,
+    pub mods: Mods,
+}
+
+impl From<KeyName> for Key {
+    fn from(name: KeyName) -> Key {
+        Key::plain(name)
+    }
+}
+
+/// Compare a [`Key`] to a bare [`KeyName`] as if the key had no modifiers, so
+/// tests and callers can write `key == KeyName::Down` for a plain keypress.
+impl PartialEq<KeyName> for Key {
+    fn eq(&self, other: &KeyName) -> bool {
+        self.mods.is_empty() && self.name == *other
+    }
+}
+
+impl Key {
+    /// A key pressed on its own (no modifiers).
+    pub fn plain(name: KeyName) -> Key {
+        Key {
+            name,
+            mods: Mods::NONE,
+        }
+    }
+
+    /// The base key for a printable ASCII character (used for combos such as
+    /// `Ctrl-C`/`Alt-x`, where the base is a letter rather than a named key).
+    /// Stored as a single-character [`KeyName::Char`].
+    fn char(c: char) -> KeyName {
+        KeyName::Char(c)
+    }
+
+    /// Parse a key spec (case-insensitive), accepting modifier prefixes joined
+    /// by `-` in any order, e.g. `Ctrl-C`, `alt-x`, `Shift-Tab`,
+    /// `Ctrl-Shift-Right`. A spec with no modifiers must be a named key (a bare
+    /// printable character is left to be typed as text, not treated as a key).
+    ///
+    /// Modifier tokens: `Ctrl`/`Control`, `Alt`/`Meta`/`Option`, `Shift`. The
+    /// final token is the base key: either a [`KeyName`] name/alias, or (only
+    /// when at least one modifier is present) a single printable character.
+    pub fn parse(spec: &str) -> Option<Key> {
+        // Fast path: a plain named key (possibly containing no '-').
+        if let Some(name) = KeyName::parse(spec) {
+            return Some(Key::plain(name));
+        }
+
+        let mut mods = Mods::default();
+        let parts: Vec<&str> = spec.split('-').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let (base, prefixes) = parts.split_last().unwrap();
+        for token in prefixes {
+            match token.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => mods.ctrl = true,
+                "alt" | "meta" | "option" => mods.alt = true,
+                "shift" => mods.shift = true,
+                _ => return None,
+            }
+        }
+        if mods.is_empty() {
+            return None;
+        }
+
+        // The base is either a named key or a single printable character.
+        let name = if let Some(name) = KeyName::parse(base) {
+            name
+        } else {
+            let mut chars = base.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() || !c.is_ascii_graphic() && c != ' ' {
+                return None;
+            }
+            Key::char(c)
+        };
+        Some(Key { name, mods })
+    }
+
+    /// The canonical text form used in YAML and progress display, e.g. `Down`,
+    /// `Ctrl-C`, `Alt-x`, `Ctrl-Shift-Right`. Plain keys serialize exactly as
+    /// before so existing scripts round-trip unchanged.
+    pub fn label(self) -> String {
+        let base = match self.name {
+            KeyName::Char(c) => c.to_string(),
+            other => other.label().to_string(),
+        };
+        if self.mods.is_empty() {
+            return base;
+        }
+        let mut out = String::new();
+        if self.mods.ctrl {
+            out.push_str("Ctrl-");
+        }
+        if self.mods.alt {
+            out.push_str("Alt-");
+        }
+        if self.mods.shift {
+            out.push_str("Shift-");
+        }
+        out.push_str(&base);
+        out
+    }
+
+    /// The raw byte sequence sent to the child for this keypress.
+    ///
+    /// - No modifiers: the base [`KeyName`]'s bytes.
+    /// - `Ctrl` + ASCII letter (and a few punctuation keys): the C0 control
+    ///   byte, e.g. `Ctrl-C` → `0x03`.
+    /// - `Alt` + key: `ESC` followed by the key's own bytes.
+    /// - `Shift-Tab`: the back-tab `ESC [ Z`.
+    /// - Modified cursor/nav keys: the xterm CSI-with-parameter form.
+    pub fn bytes(self) -> Vec<u8> {
+        if self.mods.is_empty() {
+            return match self.name {
+                KeyName::Char(c) => c.to_string().into_bytes(),
+                other => other.bytes().to_vec(),
+            };
+        }
+
+        // Shift-Tab has its own dedicated sequence.
+        if self.name == KeyName::Tab && self.mods == (Mods { shift: true, ..Mods::NONE }) {
+            return b"\x1b[Z".to_vec();
+        }
+
+        // Modified cursor/navigation keys use CSI with a modifier parameter.
+        if self.name.is_csi_nav() {
+            let p = self.mods.csi_param();
+            let seq = match self.name {
+                KeyName::Up => format!("\x1b[1;{p}A"),
+                KeyName::Down => format!("\x1b[1;{p}B"),
+                KeyName::Right => format!("\x1b[1;{p}C"),
+                KeyName::Left => format!("\x1b[1;{p}D"),
+                KeyName::Home => format!("\x1b[1;{p}H"),
+                KeyName::End => format!("\x1b[1;{p}F"),
+                KeyName::PageUp => format!("\x1b[5;{p}~"),
+                KeyName::PageDown => format!("\x1b[6;{p}~"),
+                KeyName::Delete => format!("\x1b[3;{p}~"),
+                _ => unreachable!("is_csi_nav covers exactly these keys"),
+            };
+            return seq.into_bytes();
+        }
+
+        // Ctrl + a single character or a printable named key → C0 control byte.
+        // Combined with Alt, the sequence is prefixed with ESC.
+        if self.mods.ctrl {
+            if let Some(ctrl_byte) = self.ctrl_byte() {
+                let mut out = Vec::new();
+                if self.mods.alt {
+                    out.push(0x1b);
+                }
+                out.push(ctrl_byte);
+                return out;
+            }
+        }
+
+        // Alt + <key> (no usable Ctrl encoding): ESC followed by the key bytes.
+        if self.mods.alt {
+            let mut out = vec![0x1b];
+            match self.name {
+                KeyName::Char(c) => out.extend_from_slice(c.to_string().as_bytes()),
+                other => out.extend_from_slice(other.bytes()),
+            }
+            return out;
+        }
+
+        // A modifier combination with no standard encoding (e.g. bare Shift on a
+        // letter): fall back to the base key's own bytes.
+        match self.name {
+            KeyName::Char(c) => c.to_string().into_bytes(),
+            other => other.bytes().to_vec(),
+        }
+    }
+
+    /// The C0 control byte for a `Ctrl-<key>` combo, if one exists.
+    ///
+    /// `Ctrl-A`..`Ctrl-Z` map to `0x01`..`0x1a`; a handful of punctuation keys
+    /// have standard control bytes too (`Ctrl-Space`=NUL, `Ctrl-[`=ESC, etc.).
+    fn ctrl_byte(self) -> Option<u8> {
+        let c = match self.name {
+            KeyName::Char(c) => c,
+            KeyName::Space => ' ',
+            _ => return None,
+        };
+        let upper = c.to_ascii_uppercase();
+        match upper {
+            'A'..='Z' => Some((upper as u8) & 0x1f),
+            ' ' => Some(0x00),
+            '[' => Some(0x1b),
+            '\\' => Some(0x1c),
+            ']' => Some(0x1d),
+            '^' => Some(0x1e),
+            '_' => Some(0x1f),
+            '@' => Some(0x00),
+            _ => None,
+        }
+    }
+
+    /// Map a raw byte sequence back to the keypress that produces it (the
+    /// inverse of [`Key::bytes`]), for the recorder. Recognizes plain named
+    /// keys, `Ctrl-<letter>` control bytes, `Shift-Tab`, and modified CSI
+    /// cursor/nav sequences. Returns `None` if nothing matches exactly.
+    pub fn from_bytes(seq: &[u8]) -> Option<Key> {
+        // Plain named keys first (Enter/Tab/Esc/arrows/etc.).
+        if let Some(name) = KeyName::from_bytes(seq) {
+            return Some(Key::plain(name));
+        }
+
+        // Shift-Tab: ESC [ Z.
+        if seq == b"\x1b[Z" {
+            return Some(Key {
+                name: KeyName::Tab,
+                mods: Mods {
+                    shift: true,
+                    ..Mods::NONE
+                },
+            });
+        }
+
+        // Modified CSI cursor/nav sequences: `ESC [ 1 ; <p> <A-F|H>` and
+        // `ESC [ <3|5|6> ; <p> ~`.
+        if let Some(key) = Key::from_csi_modified(seq) {
+            return Some(key);
+        }
+
+        // A single C0 control byte → Ctrl-<letter> (but not the ones already
+        // owned by named keys: CR/LF=Enter, HT=Tab, ESC=Esc, DEL=Backspace).
+        if seq.len() == 1 {
+            let b = seq[0];
+            if let Some(key) = Key::ctrl_from_byte(b) {
+                return Some(key);
+            }
+        }
+
+        None
+    }
+
+    /// Decode a modified CSI cursor/nav sequence into a [`Key`], or `None`.
+    fn from_csi_modified(seq: &[u8]) -> Option<Key> {
+        if seq.len() < 4 || &seq[..2] != b"\x1b[" {
+            return None;
+        }
+        let body = &seq[2..];
+        // Split "<lead>;<param><final>" — lead is 1/3/5/6, final is a letter or
+        // '~'. There must be exactly one ';'.
+        let semi = body.iter().position(|&b| b == b';')?;
+        let lead = std::str::from_utf8(&body[..semi]).ok()?;
+        let rest = &body[semi + 1..];
+        if rest.len() < 2 {
+            return None;
+        }
+        let (param_bytes, final_byte) = rest.split_at(rest.len() - 1);
+        let param: u8 = std::str::from_utf8(param_bytes).ok()?.parse().ok()?;
+        let mods = Mods::from_csi_param(param)?;
+        if mods.is_empty() {
+            return None;
+        }
+        let final_byte = final_byte[0];
+        let name = match (lead, final_byte) {
+            ("1", b'A') => KeyName::Up,
+            ("1", b'B') => KeyName::Down,
+            ("1", b'C') => KeyName::Right,
+            ("1", b'D') => KeyName::Left,
+            ("1", b'H') => KeyName::Home,
+            ("1", b'F') => KeyName::End,
+            ("3", b'~') => KeyName::Delete,
+            ("5", b'~') => KeyName::PageUp,
+            ("6", b'~') => KeyName::PageDown,
+            _ => return None,
+        };
+        Some(Key { name, mods })
+    }
+
+    /// Map a lone C0 control byte to `Ctrl-<letter>`, skipping bytes that are
+    /// already meaningful as named keys (so the recorder keeps decoding CR/LF as
+    /// Enter, HT as Tab, ESC as Esc, and DEL as Backspace).
+    fn ctrl_from_byte(b: u8) -> Option<Key> {
+        match b {
+            b'\r' | b'\n' | b'\t' | 0x1b | 0x7f => None,
+            0x00 => Some(Key {
+                name: Key::char(' '),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::NONE
+                },
+            }),
+            0x01..=0x1a => {
+                let letter = (b + b'a' - 1) as char;
+                Some(Key {
+                    name: Key::char(letter),
+                    mods: Mods {
+                        ctrl: true,
+                        ..Mods::NONE
+                    },
+                })
+            }
+            0x1c => Some(Key {
+                name: Key::char('\\'),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::NONE
+                },
+            }),
+            0x1d => Some(Key {
+                name: Key::char(']'),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::NONE
+                },
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -302,7 +702,7 @@ impl<'de> Deserialize<'de> for Action {
                         let keys = names
                             .iter()
                             .map(|name| {
-                                KeyName::parse(name).ok_or_else(|| {
+                                Key::parse(name).ok_or_else(|| {
                                     de::Error::custom(format!("Invalid key name {name}"))
                                 })
                             })
@@ -324,12 +724,14 @@ impl<'de> Deserialize<'de> for Action {
                         map.next_value::<de::IgnoredAny>()?;
                         Action::End
                     }
-                    // A bare special key `Down: 3` / `End: 1` (repeat the key
-                    // `count` times). The value is the repeat count (>= 1); it
-                    // may be omitted (e.g. `Esc:` or `Esc: ~`), which is treated
-                    // as a single press.
+                    // A bare special key `Down: 3` / `End: 1` / `Ctrl-C: 2`
+                    // (repeat the key `count` times). The tag may be a plain
+                    // named key or a modifier combo (`Ctrl-C`, `Shift-Tab`,
+                    // `Ctrl-Shift-Right`). The value is the repeat count (>= 1);
+                    // it may be omitted (e.g. `Esc:` or `Esc: ~`), which is
+                    // treated as a single press.
                     other => {
-                        let key = KeyName::parse(other).ok_or_else(|| {
+                        let key = Key::parse(other).ok_or_else(|| {
                             de::Error::custom(format!("Invalid action or key `{other}`"))
                         })?;
                         let count: u32 = map.next_value::<Option<u32>>()?.unwrap_or(1);
@@ -402,7 +804,7 @@ impl Serialize for Action {
                 map.end()
             }
             Action::Key { keys } => {
-                let labels: Vec<&'static str> = keys.iter().map(|k| k.label()).collect();
+                let labels: Vec<String> = keys.iter().map(|k| k.label()).collect();
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry("Keys", &labels)?;
                 map.end()
@@ -1069,14 +1471,14 @@ fn send_line(
 /// not race the terminal's handling of the final key.
 fn send_keys(
     session: &mut PtySession,
-    keys: &[KeyName],
+    keys: &[Key],
     rng: &mut StdRng,
     key_delay: (f64, f64),
     output_chunks: &mut Vec<OutputChunk>,
     watch: bool,
 ) -> Result<()> {
     for key in keys {
-        session.write(key.bytes())?;
+        session.write(&key.bytes())?;
         sleep(Duration::from_secs_f64(sample(rng, key_delay)));
         mirror_and_capture(output_chunks, session.drain_output(), watch);
     }
@@ -1488,7 +1890,7 @@ mod tests {
         assert_eq!(
             script.actions[2],
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             }
         );
         // Then a `Wait` giving the launched TUI time to paint, and the query.
@@ -1592,6 +1994,137 @@ mod tests {
         assert_eq!(KeyName::from_bytes(b"zzz"), None);
     }
 
+    #[test]
+    fn key_parse_plain_named_key_has_no_modifiers() {
+        let k = Key::parse("Down").expect("plain named key parses");
+        assert_eq!(k, Key::plain(KeyName::Down));
+        assert!(k.mods.is_empty());
+        // A bare printable character is NOT a key (it stays text).
+        assert_eq!(Key::parse("a"), None);
+    }
+
+    #[test]
+    fn key_parse_modifier_combos() {
+        // Ctrl + a letter (case-insensitive).
+        let ctrl_c = Key::parse("Ctrl-C").expect("Ctrl-C parses");
+        assert_eq!(ctrl_c.name, KeyName::Char('C'));
+        assert!(ctrl_c.mods.ctrl && !ctrl_c.mods.alt && !ctrl_c.mods.shift);
+        assert_eq!(Key::parse("ctrl-c").unwrap().label(), "Ctrl-c");
+
+        // Alt + a character, and Shift + a named key.
+        let alt_x = Key::parse("Alt-x").expect("Alt-x parses");
+        assert!(alt_x.mods.alt && !alt_x.mods.ctrl);
+        let shift_tab = Key::parse("Shift-Tab").expect("Shift-Tab parses");
+        assert_eq!(shift_tab.name, KeyName::Tab);
+        assert!(shift_tab.mods.shift);
+
+        // Order-independent, multiple modifiers.
+        let a = Key::parse("Ctrl-Shift-Right").unwrap();
+        let b = Key::parse("Shift-Ctrl-Right").unwrap();
+        assert_eq!(a, b);
+        assert!(a.mods.ctrl && a.mods.shift && a.name == KeyName::Right);
+
+        // An unknown modifier token fails.
+        assert_eq!(Key::parse("Hyper-x"), None);
+    }
+
+    #[test]
+    fn key_bytes_for_modifier_combos() {
+        // Ctrl + letter → the C0 control byte.
+        assert_eq!(Key::parse("Ctrl-C").unwrap().bytes(), vec![0x03]);
+        assert_eq!(Key::parse("Ctrl-D").unwrap().bytes(), vec![0x04]);
+        assert_eq!(Key::parse("Ctrl-U").unwrap().bytes(), vec![0x15]);
+        assert_eq!(Key::parse("Ctrl-A").unwrap().bytes(), vec![0x01]);
+
+        // Alt + char → ESC then the char.
+        assert_eq!(Key::parse("Alt-x").unwrap().bytes(), vec![0x1b, b'x']);
+
+        // Shift-Tab → the back-tab CSI.
+        assert_eq!(Key::parse("Shift-Tab").unwrap().bytes(), b"\x1b[Z".to_vec());
+
+        // Modified cursor/nav keys → xterm CSI-with-parameter.
+        assert_eq!(Key::parse("Ctrl-Right").unwrap().bytes(), b"\x1b[1;5C".to_vec());
+        assert_eq!(Key::parse("Shift-Up").unwrap().bytes(), b"\x1b[1;2A".to_vec());
+        assert_eq!(Key::parse("Ctrl-Shift-Left").unwrap().bytes(), b"\x1b[1;6D".to_vec());
+        assert_eq!(Key::parse("Ctrl-End").unwrap().bytes(), b"\x1b[1;5F".to_vec());
+        assert_eq!(Key::parse("Ctrl-PageDown").unwrap().bytes(), b"\x1b[6;5~".to_vec());
+
+        // A plain key still emits exactly the base bytes.
+        assert_eq!(Key::plain(KeyName::Down).bytes(), b"\x1bOB".to_vec());
+    }
+
+    #[test]
+    fn key_label_roundtrips_through_parse() {
+        for spec in [
+            "Down",
+            "Enter",
+            "Ctrl-c",
+            "Alt-x",
+            "Shift-Tab",
+            "Ctrl-Shift-Right",
+            "Ctrl-End",
+        ] {
+            let key = Key::parse(spec).unwrap_or_else(|| panic!("{spec} should parse"));
+            let reparsed = Key::parse(&key.label())
+                .unwrap_or_else(|| panic!("label {:?} should re-parse", key.label()));
+            assert_eq!(reparsed, key, "label round-trip failed for {spec}");
+        }
+    }
+
+    #[test]
+    fn key_from_bytes_recovers_modifier_combos() {
+        // Plain named keys still round-trip.
+        assert_eq!(Key::from_bytes(b"\r"), Some(Key::plain(KeyName::Enter)));
+        assert_eq!(Key::from_bytes(b"\x1bOB"), Some(Key::plain(KeyName::Down)));
+
+        // Ctrl-letter control bytes decode back to Ctrl-<letter>.
+        assert_eq!(Key::from_bytes(&[0x03]), Key::parse("Ctrl-c"));
+        assert_eq!(Key::from_bytes(&[0x15]), Key::parse("Ctrl-u"));
+
+        // Shift-Tab and modified CSI nav sequences decode back.
+        assert_eq!(Key::from_bytes(b"\x1b[Z"), Key::parse("Shift-Tab"));
+        assert_eq!(Key::from_bytes(b"\x1b[1;5C"), Key::parse("Ctrl-Right"));
+        assert_eq!(Key::from_bytes(b"\x1b[1;6D"), Key::parse("Ctrl-Shift-Left"));
+
+        // Bytes owned by named keys are NOT hijacked as Ctrl combos.
+        assert_eq!(Key::from_bytes(b"\t"), Some(Key::plain(KeyName::Tab)));
+        assert_eq!(Key::from_bytes(b"\x1b"), Some(Key::plain(KeyName::Esc)));
+        assert_eq!(Key::from_bytes(b"\x7f"), Some(Key::plain(KeyName::Backspace)));
+    }
+
+    #[test]
+    fn parse_ctrl_combo_shorthand_and_keys_list() {
+        // A bare `Ctrl-C:` mapping is a single Ctrl-C press; a count repeats it.
+        let yaml = script_yaml_with_actions("- Ctrl-C:\n- Ctrl-U: 2");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse ctrl combos");
+        assert_eq!(
+            script.actions[0],
+            Action::Key {
+                keys: vec![Key::parse("Ctrl-C").unwrap()],
+            }
+        );
+        assert_eq!(
+            script.actions[1],
+            Action::Key {
+                keys: vec![Key::parse("Ctrl-U").unwrap(), Key::parse("Ctrl-U").unwrap()],
+            }
+        );
+
+        // The `Keys: [..]` list accepts modifier combos too.
+        let yaml = script_yaml_with_actions("- Keys: [Ctrl-O, Enter, Ctrl-X]");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse keys list");
+        assert_eq!(
+            script.actions[0],
+            Action::Key {
+                keys: vec![
+                    Key::parse("Ctrl-O").unwrap(),
+                    KeyName::Enter.into(),
+                    Key::parse("Ctrl-X").unwrap(),
+                ],
+            }
+        );
+    }
+
     /// Deserialize a single `Action` from a one-item YAML sequence (the shape
     /// actions appear in inside a script) so the full `Action` grammar is
     /// exercised, including the bare-string `Text` form.
@@ -1620,10 +2153,10 @@ mod tests {
                 comment: "a caption".to_string(),
             },
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Down, KeyName::Enter],
+                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
             },
             Action::Key {
-                keys: vec![KeyName::Esc],
+                keys: vec![KeyName::Esc.into()],
             },
             Action::Wait { seconds: 1.5 },
             Action::End,
@@ -1666,13 +2199,13 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Down, KeyName::Down],
+                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Down.into()],
             }
         );
         assert_eq!(
             script.actions[1],
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             }
         );
     }
@@ -1686,13 +2219,13 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Esc],
+                keys: vec![KeyName::Esc.into()],
             }
         );
         assert_eq!(
             script.actions[1],
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             }
         );
     }
@@ -1706,7 +2239,7 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Down, KeyName::Enter],
+                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
             }
         );
     }
@@ -1728,7 +2261,7 @@ mod tests {
         );
         assert_eq!(
             Action::Key {
-                keys: vec![KeyName::Down, KeyName::Enter],
+                keys: vec![KeyName::Down.into(), KeyName::Enter.into()],
             }
             .progress_label(),
             "key Down Enter"
@@ -1845,7 +2378,7 @@ actions:
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::End, KeyName::End],
+                keys: vec![KeyName::End.into(), KeyName::End.into()],
             }
         );
     }

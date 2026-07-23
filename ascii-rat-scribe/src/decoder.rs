@@ -14,12 +14,14 @@
 //! Partial escape sequences that straddle a read boundary are buffered so a
 //! multi-byte key is never split into garbage text.
 
-use ascii_rat_stage::script::{Action, KeyName};
+use ascii_rat_stage::script::{Action, Key, KeyName};
 use std::time::{Duration, Instant};
 
-/// The longest byte sequence any [`KeyName`] maps to (`\x1b[3~` etc. are 4).
-/// Used to decide when a lone `ESC` can no longer be the start of a known key.
-const MAX_KEY_LEN: usize = 4;
+/// The longest byte sequence any [`Key`] maps to. Plain nav keys are up to 4
+/// bytes (`\x1b[3~`); modified cursor/nav keys use the CSI-with-parameter form
+/// and are up to 6 bytes (`\x1b[1;5C`, `\x1b[6;5~`). Used to decide when a lone
+/// `ESC` can no longer be the start of a known key.
+const MAX_KEY_LEN: usize = 6;
 
 /// Incremental decoder turning a keystroke byte/timing stream into `Action`s.
 pub struct Decoder {
@@ -137,7 +139,7 @@ impl Decoder {
         let first = self.pending[0];
 
         // Named single-byte keys (Enter, Tab, Backspace, Space).
-        if let Some(key) = KeyName::from_bytes(&[first]) {
+        if let Some(key) = Key::from_bytes(&[first]) {
             self.pending.remove(0);
             self.push_key(key);
             return true;
@@ -148,12 +150,13 @@ impl Decoder {
         // so both map to the same key when recording.
         if first == b'\n' {
             self.pending.remove(0);
-            self.push_key(KeyName::Enter);
+            self.push_key(Key::plain(KeyName::Enter));
             return true;
         }
 
-        // Other C0 control bytes we don't name are dropped (e.g. Ctrl-C's 0x03
-        // would kill the child anyway; it is not part of the script grammar).
+        // Any remaining C0 control byte / DEL that is not a recognized key
+        // (`Key::from_bytes` above already handled the `Ctrl-<letter>` control
+        // bytes) is dropped: it is not part of the script grammar.
         if first < 0x20 || first == 0x7f {
             self.pending.remove(0);
             return true;
@@ -203,10 +206,11 @@ impl Decoder {
         }
 
         // Longest-match against known keys: try the longest known key length
-        // down to a lone ESC.
+        // down to a lone ESC. This covers plain nav keys (`\x1b[3~`, SS3
+        // arrows) and modified CSI sequences (`\x1b[1;5C`, `\x1b[6;5~`) alike.
         let max = MAX_KEY_LEN.min(self.pending.len());
         for len in (1..=max).rev() {
-            if let Some(key) = KeyName::from_bytes(&self.pending[..len]) {
+            if let Some(key) = Key::from_bytes(&self.pending[..len]) {
                 self.pending.drain(..len);
                 self.push_key(key);
                 return true;
@@ -216,23 +220,38 @@ impl Decoder {
         // Enough bytes and nothing matched: treat the lone ESC as the Esc key
         // and re-examine the rest on the next loop iteration.
         self.pending.remove(0);
-        self.push_key(KeyName::Esc);
+        self.push_key(Key::plain(KeyName::Esc));
         true
     }
 
-    /// Whether the current `pending` buffer is a strict prefix of some known
-    /// key sequence that is longer than the buffer (so waiting for more bytes
-    /// could yield a longer, more-specific key match).
+    /// Whether the current `pending` buffer could still be extended into a
+    /// longer known key, so the decoder should wait for more bytes rather than
+    /// commit a shorter match (or a lone `Esc`).
+    ///
+    /// An escape run that has not yet reached a sequence terminator (a CSI
+    /// final byte in `@`..`~`, or the SS3 letter after `ESC O`) may still grow
+    /// into a full nav/modified key, so it is treated as an incomplete prefix.
     fn is_prefix_of_longer_key(&self) -> bool {
-        let n = self.pending.len();
-        KeyName::ALL.iter().any(|k| {
-            let seq = k.bytes();
-            seq.len() > n && seq.starts_with(&self.pending)
-        })
+        let p = &self.pending;
+        // A lone ESC could begin any escape sequence.
+        if p.as_slice() == [0x1b] {
+            return true;
+        }
+        // `ESC O` (SS3 introducer) awaits its final letter.
+        if p.as_slice() == [0x1b, b'O'] {
+            return true;
+        }
+        // A CSI run (`ESC [ ...`) is incomplete until a final byte arrives.
+        if p.len() >= 2 && p[0] == 0x1b && p[1] == b'[' {
+            let last = *p.last().unwrap();
+            let has_final = p.len() > 2 && (0x40..=0x7e).contains(&last);
+            return !has_final;
+        }
+        false
     }
 
     /// Append a decoded key, flushing any buffered text and owed wait first.
-    fn push_key(&mut self, key: KeyName) {
+    fn push_key(&mut self, key: Key) {
         self.flush_text();
         self.flush_wait();
         // Merge consecutive single-key actions into one `Key { keys: [..] }`
@@ -307,7 +326,7 @@ mod tests {
             vec![
                 Action::Text("ls".to_string()),
                 Action::Key {
-                    keys: vec![KeyName::Enter]
+                    keys: vec![KeyName::Enter.into()]
                 },
             ]
         );
@@ -324,7 +343,7 @@ mod tests {
             vec![
                 Action::Text("hi".to_string()),
                 Action::Key {
-                    keys: vec![KeyName::Enter]
+                    keys: vec![KeyName::Enter.into()]
                 },
             ]
         );
@@ -340,7 +359,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Key {
-                keys: vec![KeyName::Down]
+                keys: vec![KeyName::Down.into()]
             }]
         );
     }
@@ -357,7 +376,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Key {
-                keys: vec![KeyName::Delete]
+                keys: vec![KeyName::Delete.into()]
             }]
         );
     }
@@ -376,7 +395,7 @@ mod tests {
                 Action::Text("a".to_string()),
                 Action::Wait { seconds: 1.0 },
                 Action::Key {
-                    keys: vec![KeyName::Enter]
+                    keys: vec![KeyName::Enter.into()]
                 },
             ]
         );
@@ -396,7 +415,7 @@ mod tests {
                 Action::Text("a".to_string()),
                 Action::Wait { seconds: 1.5 },
                 Action::Key {
-                    keys: vec![KeyName::Enter]
+                    keys: vec![KeyName::Enter.into()]
                 },
             ]
         );
@@ -416,11 +435,11 @@ mod tests {
             vec![
                 Action::Text("ls".to_string()),
                 Action::Key {
-                    keys: vec![KeyName::Enter]
+                    keys: vec![KeyName::Enter.into()]
                 },
                 Action::Wait { seconds: 0.99 },
                 Action::Key {
-                    keys: vec![KeyName::Down]
+                    keys: vec![KeyName::Down.into()]
                 },
             ]
         );
@@ -438,10 +457,55 @@ mod tests {
             actions,
             vec![
                 Action::Key {
-                    keys: vec![KeyName::Esc]
+                    keys: vec![KeyName::Esc.into()]
                 },
                 Action::Text("xyz".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn ctrl_letter_control_byte_becomes_ctrl_key() {
+        let base = Instant::now();
+        let mut d = Decoder::new(10_000, 0);
+        // Ctrl-U (0x15) is the "kill line" combo; it must decode back to a key.
+        d.feed(&[0x15], at(base, 0));
+        let actions = d.finish();
+        assert_eq!(
+            actions,
+            vec![Action::Key {
+                keys: vec![Key::parse("Ctrl-u").unwrap()]
+            }]
+        );
+    }
+
+    #[test]
+    fn modified_csi_sequence_becomes_modified_key() {
+        let base = Instant::now();
+        let mut d = Decoder::new(10_000, 0);
+        // Ctrl-Right: ESC [ 1 ; 5 C (a 6-byte modified CSI sequence).
+        d.feed(b"\x1b[1;5C", at(base, 0));
+        let actions = d.finish();
+        assert_eq!(
+            actions,
+            vec![Action::Key {
+                keys: vec![Key::parse("Ctrl-Right").unwrap()]
+            }]
+        );
+    }
+
+    #[test]
+    fn shift_tab_sequence_becomes_shift_tab_key() {
+        let base = Instant::now();
+        let mut d = Decoder::new(10_000, 0);
+        // Shift-Tab (back-tab): ESC [ Z.
+        d.feed(b"\x1b[Z", at(base, 0));
+        let actions = d.finish();
+        assert_eq!(
+            actions,
+            vec![Action::Key {
+                keys: vec![Key::parse("Shift-Tab").unwrap()]
+            }]
         );
     }
 }

@@ -106,11 +106,11 @@ mod tests {
         let doc = sample_doc(vec![
             Action::Text("ls".to_string()),
             Action::Key {
-                keys: vec![KeyName::Enter],
+                keys: vec![KeyName::Enter.into()],
             },
             Action::Wait { seconds: 1.0 },
             Action::Key {
-                keys: vec![KeyName::Down],
+                keys: vec![KeyName::Down.into()],
             },
         ]);
         let yaml = doc.to_yaml_string().expect("serialize");
@@ -132,14 +132,14 @@ mod tests {
         assert_eq!(
             script.actions[1],
             Action::Key {
-                keys: vec![KeyName::Enter]
+                keys: vec![KeyName::Enter.into()]
             }
         );
         assert_eq!(script.actions[2], Action::Wait { seconds: 1.0 });
         assert_eq!(
             script.actions[3],
             Action::Key {
-                keys: vec![KeyName::Down]
+                keys: vec![KeyName::Down.into()]
             }
         );
         // Terminated by END_REC.
