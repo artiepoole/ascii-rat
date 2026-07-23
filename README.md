@@ -77,10 +77,12 @@ cargo test
 the idle gaps between keystrokes — into a `demo.yaml` script.
 
 ```
-ascii-rat-scribe [OPTIONS] -- <command> [args...]
+ascii-rat-scribe [OPTIONS] [-- <command> [args...]]
 ```
 
-Everything after `--` is the command line to run and record.
+Everything after `--` is the command line to run and record. If you omit the
+command entirely, `ascii-rat-scribe` records `bash`, giving you a clean terminal
+you can type into.
 
 Key options:
 
@@ -134,7 +136,14 @@ timings before handing it to `ascii-rat-bard`.
 
 `ascii-rat-scribe` records whatever command you put after `--`. To get a blank
 prompt you can freely type any commands into — rather than a single fixed
-program like `htop` — record a shell as the command:
+program like `htop` — record a shell as the command. Because `bash` is the
+default, running the recorder with no command at all does exactly this:
+
+```bash
+ascii-rat-scribe
+```
+
+which is equivalent to naming the shell explicitly:
 
 ```bash
 ascii-rat-scribe -o session.yaml --cast session.cast -- bash

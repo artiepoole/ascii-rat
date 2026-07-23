@@ -9,7 +9,7 @@ mod capture;
 mod decoder;
 mod emit;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Parser;
 use std::process::ExitCode;
 
@@ -52,8 +52,9 @@ struct Cli {
     typing_delay_ms: u64,
 
     /// The command (and its arguments) to run and record. Everything after
-    /// `--` is treated as the command line.
-    #[arg(trailing_var_arg = true, required = true)]
+    /// `--` is treated as the command line. If omitted, `bash` is recorded so
+    /// you get a clean terminal you can type into.
+    #[arg(trailing_var_arg = true)]
     command: Vec<String>,
 }
 
@@ -68,14 +69,16 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    if cli.command.is_empty() {
-        bail!("no command given; usage: ascii-rat-scribe [options] -- <command...>");
-    }
+    let command = if cli.command.is_empty() {
+        vec!["bash".to_string()]
+    } else {
+        cli.command.clone()
+    };
 
     let (cols, rows) = resolve_size(cli.cols, cli.rows);
 
     let options = capture::CaptureOptions {
-        command: cli.command.clone(),
+        command,
         cols,
         rows,
         wait_threshold_ms: cli.wait_threshold_ms,
