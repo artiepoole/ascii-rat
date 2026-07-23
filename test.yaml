@@ -1,0 +1,26 @@
+output_file: "test.cast"
+start_delay: 0.3
+end_delay: 0.5
+typing_delay: [0.00, 0.05]
+pre_nl_delay: [0.2, 0.21]
+post_nl_delay: [0.8, 0.81]
+# Per-keypress delay slept after every key a keypress action sends (independent
+# of the line/newline timing above). Written in milliseconds via the `_ms`
+# suffix; a single number is a fixed delay, a [low, high] pair is jittered.
+key_delay_ms: [150, 200]
+# Enable sudo handling: after a command whose output shows a password prompt
+# (default prompts: "assword", "[sudo]"), the tool types the supplied password
+# character-by-character. The password is asked for once (hidden) at record time.
+sudo: true
+actions:
+# Typed strings type their characters only; press Enter explicitly to run them.
+- "sudo whoami"
+- Enter: 1
+# Give the launched command time to finish.
+- Wait: 2.0
+- "exit"
+- Enter: 1
+# End the recording exactly here (replaces the old marker + EndMarkerFilter).
+- END_REC:
+cols: 100
+rows: 40
