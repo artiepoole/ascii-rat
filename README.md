@@ -41,7 +41,7 @@ scribe who records what happens, and the bard who performs it back.
 
 ## Building
 
-You need a recent stable [Rust toolchain](https://rustup.rs/) (edition 2021).
+You need a recent stable [Rust toolchain](https://rustup.rs/) (edition 2024).
 
 Build everything in the workspace:
 
