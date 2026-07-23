@@ -54,3 +54,51 @@ common CSI (`ESC [ <letter>`) form, to match how the original `snap-rat` demo wa
 recorded. Most full-screen programs accept both, so this rarely matters; if a
 program does not respond to an arrow key, its application-cursor-key mode may
 expect the CSI form.
+
+## Modifier combinations
+
+Any key can be pressed with modifiers held. Write the modifiers as a prefix
+joined to the key with `-`, for example:
+
+```yaml
+- Ctrl-C:                 # send Ctrl-C
+- Ctrl-U: 1               # kill the current line (a count works too)
+- Shift-Tab:              # back-tab
+- Ctrl-Shift-Right:       # word-select right in many TUIs
+- Keys: [Ctrl-O, Enter, Ctrl-X]   # nano: write out, confirm, then quit
+```
+
+The recognised modifier tokens are `Ctrl` (also `Control`), `Alt` (also `Meta`,
+`Option`), and `Shift`. They may be combined in any order and are matched
+case-insensitively, so `Ctrl-Shift-Right`, `shift-ctrl-right`, and
+`CTRL-SHIFT-RIGHT` are the same key. The base key is either one of the named
+keys in the table above or a single printable character (as in `Ctrl-C` or
+`Alt-x`). A bare character on its own is not a key — type it as text instead.
+
+### How each combination is encoded
+
+The byte sequence sent to the program is computed from the base key and the
+modifiers:
+
+| Combination | Sends |
+| --- | --- |
+| **`Ctrl-<letter>`** | The C0 control byte, e.g. `Ctrl-C` → `0x03`, `Ctrl-U` → `0x15`, `Ctrl-A` → `0x01`. |
+| **`Ctrl-Space`** | `NUL` (`0x00`). |
+| **`Alt-<key>`** | `ESC` followed by the key's own bytes, e.g. `Alt-x` → `ESC x`. |
+| **`Shift-Tab`** | The back-tab `ESC [ Z`. |
+| **Modified cursor/nav keys** | The xterm CSI-with-parameter form (see below). |
+
+Modified cursor and navigation keys (`Up`, `Down`, `Left`, `Right`, `Home`,
+`End`, `PageUp`, `PageDown`, `Delete`) use the xterm CSI-with-parameter
+encoding, where the parameter is `1 + Shift + 2·Alt + 4·Ctrl` (so `2` = Shift,
+`5` = Ctrl, `6` = Ctrl-Shift, …). For example `Ctrl-Right` sends `ESC [ 1 ; 5 C`
+and `Ctrl-Shift-Left` sends `ESC [ 1 ; 6 D`.
+
+### Recording vs. playback
+
+Playback (`ascii-rat-bard`) supports every combination above. The recorder
+(`ascii-rat-scribe`) can round-trip a captured keystroke back into a named
+action for `Ctrl-<letter>`, `Shift-Tab`, and the modified cursor/nav sequences.
+`Alt-<key>` combos play back correctly but are not decoded by the recorder (a
+captured `ESC`-prefixed run is treated as `Esc` followed by text), so add them by
+hand if you need them in a recorded script.

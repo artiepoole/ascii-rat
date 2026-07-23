@@ -299,7 +299,11 @@ Notable action forms:
 - **A named key** (`Enter:`, `Esc:`, `Down:`, `Tab:`, …) → one keypress; add a
   count to repeat it (`Down: 6`, `Esc: 2`). See [`keys.md`](keys.md) for the full
   list of special key names (and aliases such as `PgDn`).
-- **`Keys: [Down, Enter]`** → send several named keys once each, in order.
+- **A modifier combo** (`Ctrl-C:`, `Ctrl-U:`, `Shift-Tab:`, `Ctrl-Shift-Right:`,
+  `Alt-x:`) → one keypress with modifiers held. Join `Ctrl`/`Alt`/`Shift` to the
+  key with `-` (any order, case-insensitive); see [`keys.md`](keys.md#modifier-combinations).
+- **`Keys: [Down, Enter]`** → send several named keys once each, in order (combos
+  work here too, e.g. `Keys: [Ctrl-O, Enter, Ctrl-X]`).
 - **`Wait: <seconds>`** → pause while still capturing the child's output.
 - **`END_REC:`** → end the recording; anything after it is ignored.
 
