@@ -1,0 +1,31 @@
+# Example: the smallest useful script — type a couple of commands in a shell.
+#
+# Play it with:
+#   ascii-rat-bard --watch examples/hello-world.yaml
+#
+# It runs a bare `bash` and types two commands into it, then exits.
+
+output_file: "hello-world.cast"
+cols: 90
+rows: 24
+start_delay_ms: 500
+end_delay_ms: 500
+typing_delay_ms: 75
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+# Comment: actions require comments to be enabled so they are rendered.
+with_comments: true
+
+actions:
+  - Comment: "a minimal ascii-rat demo"
+  # A bash prompt is waiting; type a command and press Enter to run it.
+  - "echo hello, world"
+  - Enter:
+  - Wait: 1.0
+  - "ls -la"
+  - Enter:
+  - Wait: 1.5
+  # Leave the shell so the recording ends cleanly.
+  - "exit"
+  - Enter:
+  - END_REC:
