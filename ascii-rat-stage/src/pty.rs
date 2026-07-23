@@ -191,6 +191,25 @@ impl PtySession {
         wait_for_output_matching_on(&self.output_rx, needles, timeout)
     }
 
+    /// Like [`PtySession::wait_for_output_matching`], but invokes `on_chunk`
+    /// with each chunk *as it arrives* (before checking for a match), so a live
+    /// `--watch` view can mirror the child's output during the wait instead of
+    /// only after it completes.
+    ///
+    /// The chunks are still returned (unchanged) so the caller can capture them
+    /// into the cast; `on_chunk` is for side effects (live mirroring) only.
+    pub fn wait_for_output_matching_each<F>(
+        &self,
+        needles: &[&str],
+        timeout: Duration,
+        on_chunk: F,
+    ) -> Result<Vec<OutputChunk>>
+    where
+        F: FnMut(&OutputChunk),
+    {
+        wait_for_output_matching_each_on(&self.output_rx, needles, timeout, on_chunk)
+    }
+
     /// Terminate the child, join the reader thread, and return any remaining
     /// output chunks.
     pub fn close(mut self) -> Result<Vec<OutputChunk>> {
@@ -228,6 +247,23 @@ pub(crate) fn wait_for_output_matching_on(
     needles: &[&str],
     timeout: Duration,
 ) -> Result<Vec<OutputChunk>> {
+    // No per-chunk side effect: delegate to the callback form with a no-op.
+    wait_for_output_matching_each_on(rx, needles, timeout, |_| {})
+}
+
+/// Callback-driven variant of [`wait_for_output_matching_on`]: `on_chunk` is
+/// invoked with each chunk *as it arrives* (before the match check), so callers
+/// can mirror output live during the wait rather than only after it completes.
+/// See [`PtySession::wait_for_output_matching`] for the full behaviour contract.
+pub(crate) fn wait_for_output_matching_each_on<F>(
+    rx: &Receiver<OutputChunk>,
+    needles: &[&str],
+    timeout: Duration,
+    mut on_chunk: F,
+) -> Result<Vec<OutputChunk>>
+where
+    F: FnMut(&OutputChunk),
+{
     // Pre-lowercase the needles once for case-insensitive matching.
     let lowered: Vec<String> = needles.iter().map(|n| n.to_ascii_lowercase()).collect();
     let deadline = Instant::now() + timeout;
@@ -238,10 +274,13 @@ pub(crate) fn wait_for_output_matching_on(
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            anyhow::bail!("timed out waiting for the sudo password prompt");
+            anyhow::bail!("timed out waiting for expected output");
         }
         match rx.recv_timeout(remaining) {
             Ok(chunk) => {
+                // Mirror this chunk live before anything else, so the watch view
+                // updates the instant output arrives during the wait.
+                on_chunk(&chunk);
                 tail.push_str(&String::from_utf8_lossy(&chunk.bytes));
                 consumed.push(chunk);
                 let hay = tail.to_ascii_lowercase();
@@ -261,7 +300,7 @@ pub(crate) fn wait_for_output_matching_on(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                anyhow::bail!("timed out waiting for the sudo password prompt");
+                anyhow::bail!("timed out waiting for expected output");
             }
             // Child gone: return whatever we consumed instead of erroring.
             Err(RecvTimeoutError::Disconnected) => return Ok(consumed),
@@ -423,7 +462,8 @@ fn build_query_reply(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_query_reply, valid_utf8_prefix_len, wait_for_output_matching_on, OutputChunk,
+        build_query_reply, valid_utf8_prefix_len, wait_for_output_matching_each_on,
+        wait_for_output_matching_on, OutputChunk,
     };
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -447,6 +487,31 @@ mod tests {
                 .expect("needle should be found");
         // Both chunks are consumed up to and including the match.
         assert_eq!(consumed.len(), 2);
+    }
+
+    #[test]
+    fn wait_each_mirrors_every_chunk_before_the_match() {
+        let (tx, rx) = mpsc::channel();
+        // Two non-matching chunks arrive before the one containing the needle.
+        tx.send(chunk(b"line one\r\n")).unwrap();
+        tx.send(chunk(b"line two\r\n")).unwrap();
+        tx.send(chunk(b"done __DONE__\r\n")).unwrap();
+        let mut mirrored: Vec<Vec<u8>> = Vec::new();
+        let consumed = wait_for_output_matching_each_on(
+            &rx,
+            &["__DONE__"],
+            Duration::from_secs(1),
+            |c| mirrored.push(c.bytes.clone()),
+        )
+        .expect("needle should be found");
+        // The callback fired for every consumed chunk, in order, as they
+        // arrived — including the ones before the match (the whole point: the
+        // live view is fed during the wait, not only after it).
+        assert_eq!(mirrored.len(), 3);
+        assert_eq!(consumed.len(), 3);
+        assert_eq!(mirrored[0], b"line one\r\n");
+        assert_eq!(mirrored[1], b"line two\r\n");
+        assert_eq!(mirrored[2], b"done __DONE__\r\n");
     }
 
     #[test]

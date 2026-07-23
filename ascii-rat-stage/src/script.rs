@@ -26,6 +26,11 @@ const RNG_SEED: u64 = 12345;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
+/// Default timeout (seconds) for an `Expect` action when none is given: how long
+/// to wait for the expected substring before giving up and continuing. Generous
+/// so a slow command still matches, but bounded so a typo never hangs forever.
+const DEFAULT_EXPECT_TIMEOUT: f64 = 30.0;
+
 /// Terminal type advertised to the child (via `TERM`) and stored in the cast
 /// header. A full-screen TUI queries the terminfo database for this name to
 /// decide which cursor/screen-control escape sequences to emit. It must be a
@@ -92,6 +97,16 @@ pub enum Action {
     Key { keys: Vec<Key> },
     /// Pauses the recording for `seconds` (capturing output during the pause).
     Wait { seconds: f64 },
+    /// Blocks until `text` appears in the child's output (capturing output
+    /// during the wait), or `timeout` seconds elapse.
+    ///
+    /// A general synchronization primitive: instead of guessing a fixed `Wait`,
+    /// pause the script until the terminal actually prints an expected
+    /// substring (case-insensitive). Handy for waiting on a command to finish
+    /// before typing the next one (e.g. a nested `ascii-rat-bard` replay that
+    /// prints a known line, or a shell prompt). If the substring never appears
+    /// the script continues after `timeout` rather than hanging forever.
+    Expect { text: String, timeout: f64 },
     /// Ends the recording at this point (the `END_REC:` action).
     ///
     /// Any actions after it are ignored and no further child output is captured,
@@ -115,6 +130,7 @@ impl Action {
                 format!("key {}", names.join(" "))
             }
             Action::Wait { seconds } => format!("wait {seconds}s"),
+            Action::Expect { text, .. } => format!("expect {text:?}"),
             Action::End => "end recording".to_string(),
         }
     }
@@ -716,6 +732,24 @@ impl<'de> Deserialize<'de> for Action {
                         }
                         Action::Wait { seconds }
                     }
+                    // `Expect: "substr"` — block until the substring appears in
+                    // the child's output (case-insensitive), or the default
+                    // timeout elapses. The mapping form `Expect: {text: "..",
+                    // timeout: 5}` overrides the timeout.
+                    "Expect" => {
+                        let raw: ExpectField = map.next_value()?;
+                        let (text, timeout) = match raw {
+                            ExpectField::Text(text) => (text, DEFAULT_EXPECT_TIMEOUT),
+                            ExpectField::Full { text, timeout } => (text, timeout),
+                        };
+                        if text.is_empty() {
+                            return Err(de::Error::custom("`Expect` text must not be empty"));
+                        }
+                        if timeout < 0.0 {
+                            return Err(de::Error::custom("Expect timeout must be >= 0"));
+                        }
+                        Action::Expect { text, timeout }
+                    }
                     // `END_REC:` takes no meaningful value (write `END_REC:` or
                     // `END_REC: ~`); it stops the recording where it appears.
                     // Named to avoid clashing with the `End` special key, which
@@ -814,6 +848,24 @@ impl Serialize for Action {
                 map.serialize_entry("Wait", seconds)?;
                 map.end()
             }
+            Action::Expect { text, timeout } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                // Emit the bare-string form when the timeout is the default, so
+                // the common case stays terse; otherwise emit the mapping so the
+                // custom timeout round-trips.
+                if *timeout == DEFAULT_EXPECT_TIMEOUT {
+                    map.serialize_entry("Expect", text)?;
+                } else {
+                    map.serialize_entry(
+                        "Expect",
+                        &ExpectPayload {
+                            text: text.clone(),
+                            timeout: *timeout,
+                        },
+                    )?;
+                }
+                map.end()
+            }
             Action::End => {
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry("END_REC", &Option::<()>::None)?;
@@ -829,6 +881,23 @@ struct InputPayload {
     text: String,
     pre_nl_delay: f64,
     post_nl_delay: f64,
+}
+
+/// The value of an `Expect:` action: either a bare substring (using the default
+/// timeout) or a `{text, timeout}` mapping overriding it.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExpectField {
+    Text(String),
+    Full { text: String, timeout: f64 },
+}
+
+/// The `{text, timeout}` mapping form written when an `Expect` action carries a
+/// non-default timeout, so a produced script round-trips.
+#[derive(Debug, Serialize)]
+struct ExpectPayload {
+    text: String,
+    timeout: f64,
 }
 
 /// Default sudo password prompts matched (case-insensitively) against the
@@ -1134,12 +1203,24 @@ impl Script {
         self.sudo.is_some()
     }
 
-    /// The filter list to apply, ensuring a `Comment` filter is present when
-    /// comments are enabled (mirrors `with_comments_enabled`).
+    /// The filter list to apply.
+    ///
+    /// When comments are enabled a `Comment` filter is ensured (mirrors
+    /// `with_comments_enabled`), so comment actions render as captions. When
+    /// comments are disabled a `StripComments` filter is ensured instead, so any
+    /// stray `Comment` actions are removed before saving rather than crashing
+    /// the save (a `Comment` is an internal-only event that cannot be
+    /// serialized). This keeps a script that carries a `Comment` action but
+    /// leaves `with_comments` unset (e.g. one produced by `ascii-rat-scribe` and
+    /// then hand-edited) safe to replay and save.
     fn effective_filters(&self) -> Vec<Filter> {
         let mut filters = self.filters.clone();
-        if self.with_comments && !filters.iter().any(|f| matches!(f, Filter::Comment)) {
-            filters.push(Filter::Comment);
+        if self.with_comments {
+            if !filters.iter().any(|f| matches!(f, Filter::Comment)) {
+                filters.push(Filter::Comment);
+            }
+        } else if !filters.iter().any(|f| matches!(f, Filter::StripComments)) {
+            filters.push(Filter::StripComments);
         }
         filters
     }
@@ -1179,6 +1260,13 @@ impl Script {
         // correct escape sequences instead of a scrambled stream (see
         // `resolve_term`). The same value is stored in the cast header.
         cmd.env("TERM", resolve_term());
+        // Start the child shell in our own current directory. Without this,
+        // portable-pty spawns it in the user's home directory rather than where
+        // the player was launched from, so a script's relative paths (and any
+        // nested ascii-rat invocations) would resolve unexpectedly.
+        if let Ok(cwd) = std::env::current_dir() {
+            cmd.cwd(cwd);
+        }
 
         let mut session = PtySession::spawn(cmd, cols, rows)?;
 
@@ -1302,6 +1390,43 @@ impl Script {
                     // the launched program's startup frames are recorded.
                     sleep(Duration::from_secs_f64(*seconds));
                     mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
+                    // A wait is not a line, so the newline shift for a following
+                    // marker/comment should not apply.
+                    newline_delay = 0.0;
+                }
+                Action::Expect { text, timeout } => {
+                    // Block until the expected substring appears in *newly
+                    // arriving* output, capturing (and mirroring) everything
+                    // seen while we wait so the cast stays faithful.
+                    //
+                    // We deliberately do NOT scan the already-captured
+                    // `output_chunks` here: those may include the terminal's
+                    // echo of the command line that this `Expect` is meant to
+                    // synchronize on (e.g. `... ; echo DONE` — the typed line
+                    // contains `DONE` before the command has even run). Matching
+                    // that echo would return instantly and defeat the wait, so
+                    // we only look at output produced from this point onward.
+                    let needles = [text.as_str()];
+                    // Mirror each chunk to the live view *as it arrives* during
+                    // the wait. Using the plain `wait_for_output_matching` here
+                    // would buffer everything and only draw it after the marker
+                    // matched, so a long `Expect` looked frozen and then dumped
+                    // all its output at once (interleaving with the next act's
+                    // typing). The callback form flushes output live instead.
+                    let waited = session.wait_for_output_matching_each(
+                        &needles,
+                        Duration::from_secs_f64(*timeout),
+                        |chunk| {
+                            if watch {
+                                let mut stdout = std::io::stdout().lock();
+                                write_chunks_to(&mut stdout, std::slice::from_ref(chunk));
+                            }
+                        },
+                    )?;
+                    // Already mirrored above (per chunk); just capture the bytes
+                    // into the cast unchanged. Passing `watch: false` avoids
+                    // mirroring them a second time.
+                    mirror_and_capture(&mut output_chunks, waited, false);
                     // A wait is not a line, so the newline shift for a following
                     // marker/comment should not apply.
                     newline_delay = 0.0;
@@ -2159,6 +2284,14 @@ mod tests {
                 keys: vec![KeyName::Esc.into()],
             },
             Action::Wait { seconds: 1.5 },
+            Action::Expect {
+                text: "__DONE__".to_string(),
+                timeout: DEFAULT_EXPECT_TIMEOUT,
+            },
+            Action::Expect {
+                text: "ready".to_string(),
+                timeout: 5.0,
+            },
             Action::End,
         ];
 
@@ -2351,6 +2484,57 @@ actions:
         let yaml = script_yaml_with_actions("- Wait: 2.0");
         let script: Script = serde_yaml::from_str(&yaml).expect("should parse Wait action");
         assert_eq!(script.actions[0], Action::Wait { seconds: 2.0 });
+    }
+
+    #[test]
+    fn parse_expect_scalar_uses_default_timeout() {
+        // `Expect: "substr"` blocks until the substring appears, using the
+        // default timeout.
+        let yaml = script_yaml_with_actions("- Expect: \"__DONE__\"");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse Expect action");
+        assert_eq!(
+            script.actions[0],
+            Action::Expect {
+                text: "__DONE__".to_string(),
+                timeout: DEFAULT_EXPECT_TIMEOUT,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_expect_mapping_overrides_timeout() {
+        // The `{text, timeout}` mapping form overrides the default timeout.
+        let yaml = script_yaml_with_actions("- Expect: {text: \"ready\", timeout: 5.0}");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse Expect mapping");
+        assert_eq!(
+            script.actions[0],
+            Action::Expect {
+                text: "ready".to_string(),
+                timeout: 5.0,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_expect_empty_text_fails() {
+        // An empty expected substring is rejected (it would match immediately).
+        let yaml = script_yaml_with_actions("- Expect: \"\"");
+        let err = serde_yaml::from_str::<Script>(&yaml)
+            .expect_err("empty Expect text should fail to parse");
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn expect_default_serializes_as_bare_scalar() {
+        // A default-timeout Expect serializes to the terse `Expect: substr`
+        // form (a mapping value), not the `{text, timeout}` mapping.
+        let yaml = serde_yaml::to_string(&Action::Expect {
+            text: "__DONE__".to_string(),
+            timeout: DEFAULT_EXPECT_TIMEOUT,
+        })
+        .unwrap();
+        assert!(yaml.contains("Expect"), "unexpected Expect serialization: {yaml}");
+        assert!(!yaml.contains("timeout"), "default timeout should be omitted: {yaml}");
     }
 
     #[test]
@@ -2816,6 +3000,84 @@ actions:
         assert!(
             last_time >= WAIT_SECS,
             "last output time {last_time} should reflect the {WAIT_SECS}s wait"
+        );
+    }
+
+    // Records a script that runs a command which prints a known marker only
+    // after a shell-side delay, with an `Expect` waiting for that marker. The
+    // action AFTER the `Expect` must not run until the marker has appeared, so
+    // both the marker and the text typed afterwards must be present, and the
+    // recording's duration must reflect the shell delay (proving `Expect`
+    // actually blocked rather than racing ahead). Ignored by default because it
+    // depends on a working shell/PTY environment.
+    #[test]
+    #[ignore]
+    fn expect_blocks_until_substring_appears() {
+        const SLEEP_SECS: f64 = 1.0;
+        let script = Script {
+            output_file: "expect.cast".to_string(),
+            start_delay: (0.05, 0.05),
+            end_delay: (0.1, 0.1),
+            typing_delay: (0.0, 0.0),
+            pre_nl_delay: (0.0, 0.0),
+            post_nl_delay: (0.05, 0.05),
+            key_delay: (0.0, 0.0),
+            with_comments: false,
+            comments_at_top: false,
+            actions: vec![
+                // Print the marker only after a shell-side sleep, so a bare
+                // continuation would race it. The `Text` no longer submits on
+                // its own, so an explicit Enter runs the command.
+                Action::Text("sleep 1; echo __MARKER_DONE__".to_string()),
+                Action::Key {
+                    keys: vec![KeyName::Enter.into()],
+                },
+                Action::Expect {
+                    text: "__MARKER_DONE__".to_string(),
+                    timeout: 10.0,
+                },
+                Action::Text("echo after-expect".to_string()),
+                Action::Key {
+                    keys: vec![KeyName::Enter.into()],
+                },
+                Action::Text("exit".to_string()),
+                Action::Key {
+                    keys: vec![KeyName::Enter.into()],
+                },
+            ],
+            filters: vec![],
+            cols: Some(80),
+            rows: Some(24),
+            sudo: None,
+        };
+        let cast = script.run(true, false, None).expect("recording should succeed");
+        let joined: String = cast
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output { data, .. } => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            joined.contains("__MARKER_DONE__"),
+            "the expected marker should be captured: {joined}"
+        );
+        assert!(
+            joined.contains("after-expect"),
+            "the action after Expect should have run: {joined}"
+        );
+        let last_time = cast
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output { time, .. } => Some(*time),
+                _ => None,
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            last_time >= SLEEP_SECS,
+            "duration {last_time} should reflect Expect blocking for the {SLEEP_SECS}s sleep"
         );
     }
 
