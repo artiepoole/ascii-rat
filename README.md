@@ -243,7 +243,8 @@ Notable action forms:
   `ascii-rat-bard --dont-run --print-markers`.
 - **`Comment:`** → a caption/comment event.
 - **A named key** (`Enter:`, `Esc:`, `Down:`, `Tab:`, …) → one keypress; add a
-  count to repeat it (`Down: 6`, `Esc: 2`).
+  count to repeat it (`Down: 6`, `Esc: 2`). See [`keys.md`](keys.md) for the full
+  list of special key names (and aliases such as `PgDn`).
 - **`Keys: [Down, Enter]`** → send several named keys once each, in order.
 - **`Wait: <seconds>`** → pause while still capturing the child's output.
 - **`END_REC:`** → end the recording; anything after it is ignored.
