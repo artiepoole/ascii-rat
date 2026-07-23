@@ -10,6 +10,34 @@ write the script by hand, and then replay that script deterministically to
 produce a clean `.cast` file. The replay drives a real child process inside a
 PTY, so full-screen TUIs render correctly and commands that need `sudo` work.
 
+## Demo
+
+`ascii-rat` recording itself, one level at a time — each recording captures the
+level below it. Click any thumbnail to play it on asciinema.org.
+
+### Level 0 — recording the whole thing by hand
+
+A live session (driven by the commands in
+[`examples/level0.cmds`](examples/level0.cmds)) that runs the level 1 demo and
+records it with plain `asciinema rec`.
+
+[![asciicast](https://asciinema.org/a/BkW0a6aIhM5Ah7WM.svg)](https://asciinema.org/a/BkW0a6aIhM5Ah7WM)
+
+### Level 1 — the demo-ception script
+
+[`examples/demo-ception.yaml`](examples/demo-ception.yaml) replayed with
+`ascii-rat-bard`: it drives `ascii-rat-scribe` to record a new script, edits it
+in `nano`, then replays the edited script with `ascii-rat-bard`.
+
+[![asciicast](https://asciinema.org/a/zDCfG1zq4Aq8jpiy.svg)](https://asciinema.org/a/zDCfG1zq4Aq8jpiy)
+
+### Level 2 — the script recorded during the demo
+
+The innermost recording — `level2.yaml` — captured by `ascii-rat-scribe` and
+replayed by `ascii-rat-bard` from inside the level 1 demo.
+
+[![asciicast](https://asciinema.org/a/y8ERCBkab4y80AYX.svg)](https://asciinema.org/a/y8ERCBkab4y80AYX)
+
 ## Structure
 
 The project is a Cargo workspace of three crates:
