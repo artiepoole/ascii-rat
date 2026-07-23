@@ -10,7 +10,7 @@ use crate::pty::{OutputChunk, PtySession};
 use anyhow::{Context, Result};
 use portable_pty::CommandBuilder;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -1228,7 +1228,7 @@ fn sample(rng: &mut StdRng, range: (f64, f64)) -> f64 {
     if high <= low {
         low
     } else {
-        rng.gen_range(low..=high)
+        rng.random_range(low..=high)
     }
 }
 
