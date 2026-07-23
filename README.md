@@ -347,3 +347,21 @@ Play any of them, for example:
 ```bash
 ascii-rat-bard --watch examples/hello-world.yaml
 ```
+
+### The top-level demo (`demo.yaml`)
+
+The repository root holds [`demo.yaml`](demo.yaml), the flagship "demo-ception"
+demo: a single recording that shows the whole `ascii-rat` workflow end to end,
+inside one cast. When replayed it drives a shell and, on screen, uses
+`ascii-rat` itself to record a new script with `ascii-rat-scribe`, edit that
+script by hand in `nano`, and replay the edited script with `ascii-rat-bard` —
+a demo of making a demo.
+
+```bash
+ascii-rat-bard --watch demo.yaml
+```
+
+It needs `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` on `PATH`, and writes
+its inner recording to `inner-demo.yaml` / `inner-demo.cast` (both safe to
+delete). It also shows off modifier keys such as `Ctrl-O`, `Ctrl-X`, and
+`Ctrl-End` to drive the editor — see [`keys.md`](keys.md).

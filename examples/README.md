@@ -34,6 +34,11 @@ cargo run --release --bin ascii-rat-bard -- examples/hello-world.yaml
 | [`sudo-command.yaml`](sudo-command.yaml) | A privileged command via `sudo: true`; `ascii-rat-bard` prompts once for the password and types it when sudo asks. |
 | [`scribe-records-htop.yaml`](scribe-records-htop.yaml) | A meta-demo: the replay drives `ascii-rat-scribe` recording an `htop` session, so the resulting cast shows how to use the recorder on `htop`. |
 
+For the flagship "demo-ception" — a single cast that records a new script with
+`ascii-rat-scribe`, edits it in `nano`, and replays it with `ascii-rat-bard` —
+see [`demo.yaml`](../demo.yaml) in the repository root and its entry in the
+[top-level README](../README.md).
+
 ## `scribe-records-htop.yaml` in detail
 
 This is the example that records the user of `ascii-rat-scribe` recording
