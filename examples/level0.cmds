@@ -1,0 +1,13 @@
+asciinema rec demoception-manual.cast
+
+# I ran `asciinema rec demoception-manual.cast` to record this demo of a demo of a demo
+
+# This is demo level 0
+
+export PATH="$PWD/../target/release:$PATH"
+
+ascii-rat-bard demo-ception.yaml --watch
+
+# and back to level 0
+
+# Thanks for watching!

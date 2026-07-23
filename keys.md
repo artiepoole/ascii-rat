@@ -47,6 +47,12 @@ delivered to the recorded program.
 Note that `End` the key is distinct from `END_REC:`, the action that ends a
 recording. `End` sends the End key to the program; `END_REC:` stops the script.
 
+`Space` is accepted in hand-written scripts, but the recorder
+(`ascii-rat-scribe`) never emits it: a typed space is captured as ordinary text
+(a literal `" "`) so that several words stay in one string rather than being
+split apart by `Space` keys. Write a space as part of a typed string; reach for
+the `Space` key only when you need a bare space keypress on its own.
+
 ## Arrow-key encoding
 
 The arrow keys use the SS3 (`ESC O <letter>`) encoding rather than the more

@@ -49,9 +49,9 @@ All three steps happen inside the one top-level cast, so a viewer watches
 `ascii-rat` record, edit, and play back a recording without leaving it.
 
 Requirements: `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` must all be on
-`PATH` at replay time. The inner recording is written to `inner-demo.yaml` /
-`inner-demo.cast` in whatever directory you run the demo from (both are safe to
-delete afterwards). A ready-made [`inner-demo.yaml`](inner-demo.yaml) sits next
+`PATH` at replay time. The inner recording is written to `level2.yaml` /
+`level2.cast` in whatever directory you run the demo from (both are safe to
+delete afterwards). A ready-made [`level2.yaml`](level2.yaml) sits next
 to this demo as a reference of what that inner recording looks like once edited.
 
 ## `scribe-records-htop.yaml` in detail
@@ -76,6 +76,7 @@ use the full path to the binary (for example
 ## Editing these
 
 These scripts are plain YAML — copy one, change the `actions`, and replay. See
-the script format section in the [top-level README](../README.md) for every
-action form (`Marker`, `Comment`, named keys, `Wait`, `END_REC`, timing/header
-fields, and `sudo`).
+[`format.md`](../format.md) for the complete reference of every header field,
+action form (`Marker`, `Comment`, `InlineComment`, named keys, modifier combos,
+`Wait`, `Expect`, `END_REC`), timing field, `sudo`, and `filters` keyword, or the script format
+section in the [top-level README](../README.md) for a narrative walkthrough.

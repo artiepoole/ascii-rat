@@ -1,0 +1,115 @@
+output_file: "level1.cast"
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 800
+typing_delay_ms: 50
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+
+with_comments: true
+key_delay: [0.15, 0.25]
+
+actions:
+  # Start from a clean screen so the top-level demo does not begin cluttered
+  # with whatever was on the terminal before playback.
+  - InlineComment: "# This is demo level 1"
+  - "clear"
+  - Enter:
+  - Wait: 0.5
+
+  # ---------------------------------------------------------------------------
+  # Act 1 — record a new script with ascii-rat-scribe.
+  # ---------------------------------------------------------------------------
+  - Marker: "record a new script with the scribe"
+  - Comment: "step 1: record a session with ascii-rat-scribe"
+  - InlineComment: "# We will use ascii-rat-scribe to record our inputs and create level2.yaml. We specify some optional flags for fun."
+  - "ascii-rat-scribe --typing-delay-ms 50 --round-wait-ms 250 -o level2.yaml --cast level2.cast"
+  - Enter:
+  - Wait: 1.5
+  - InlineComment: "# this is demo level 2"
+  - "clear"
+  - Enter:
+  - Wait: 0.8
+
+  - Comment: "type a throwaway note, then delete it"
+  - Comment: "type a command into the recorded shell"
+  - "echo recorded by ascii-rat"
+  - Enter:
+  - Wait: 0.4
+  - "exit"
+  - Enter:
+  - InlineComment: "# back to demo level 1"
+  - Wait: 1.5
+  - Comment: "the scribe wrote level2.yaml"
+
+  # ---------------------------------------------------------------------------
+  # Act 2 — edit the recorded script by hand in nano.
+  # ---------------------------------------------------------------------------
+  - Marker: "edit the recorded script in nano"
+  - Comment: "step 2: tweak level2.yaml in an editor"
+  - "nano level2.yaml"
+  - Enter:
+  - Wait: 2.0
+  - Ctrl-W:
+  - Wait: 0.4
+  - "actions:"
+  - Enter:
+  - Wait: 0.5
+  - End:
+  - Wait: 0.3
+  - Enter:
+  - Wait: 0.3
+  - "- Comment: \"edited by hand in nano\""
+  - Wait: 1.0
+  # Add an InlineComment line right after the Comment we just typed, so the
+  # edited level2.yaml demonstrates the InlineComment shortcut too.
+  - Enter:
+  - Wait: 0.3
+  - "- InlineComment: \"# edited by hand in nano\""
+  - Wait: 1.0
+  - Comment: "save with Ctrl-O"
+  - Ctrl-O:
+  - Wait: 0.8
+  - Enter:
+  - Wait: 0.8
+  - Comment: "quit nano with Ctrl-X"
+  - Ctrl-X:
+  - Wait: 1.5
+
+  # ---------------------------------------------------------------------------
+  # Act 3 — replay the edited script with ascii-rat-bard.
+  # ---------------------------------------------------------------------------
+  - Marker: "record the edited script"
+  - Comment: "step 3: record level2.yaml with ascii-rat-bard"
+  - InlineComment: "# now replay the recorded script, using `Expect:` to wait for __DONE__ before we continue"
+  - "ascii-rat-bard --watch level2.yaml; echo __DONE__"
+  - Enter:
+  - Expect: "__DONE__"
+  - Comment: "preview the level2 recording"
+  - InlineComment: "# back to demo level 1 again"
+  - "asciinema play level2.cast; echo __DONE__"
+  - Enter:
+  - Expect: "__DONE__"
+  - InlineComment: "# back to demo level 1 again, again"
+  - Comment: "demo-ception complete: recorded, edited, and replayed"
+  - Wait: 1.0
+  - "clear"
+  - Enter:
+  - Wait: 0.8
+
+  # ---------------------------------------------------------------------------
+  # Act 4 — show how you *would* share the cast, without actually uploading.
+  # ---------------------------------------------------------------------------
+  - Marker: "show the asciinema upload command"
+  - Comment: "this is how you would upload the cast to asciinema.org"
+  - "# upload the cast to asciinema.org"
+  - Ctrl-U:
+  - "asciinema upload level2.cast"
+  - Wait: 1.5
+  - Comment: "press Ctrl-U instead of Enter, so it is not actually sent"
+  - Ctrl-U:
+  - Wait: 1.0
+  - "exit"
+  - Enter:
+  - END_REC:

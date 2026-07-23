@@ -31,6 +31,22 @@ const DEFAULT_ROWS: u16 = 24;
 /// so a slow command still matches, but bounded so a typo never hangs forever.
 const DEFAULT_EXPECT_TIMEOUT: f64 = 30.0;
 
+/// Default show duration (seconds) for an `InlineComment` action: how long the
+/// typed note lingers on screen before it is wiped, and again the settle after
+/// wiping it. Matches the hand-written `Wait: 0.4` this shortcut replaces.
+const DEFAULT_INLINE_COMMENT_SHOW: f64 = 0.4;
+
+/// The `Ctrl-U` keypress used by an `InlineComment` action to wipe the typed
+/// note (kill the whole input line) before continuing.
+const CTRL_U: Key = Key {
+    name: KeyName::Char('u'),
+    mods: Mods {
+        ctrl: true,
+        alt: false,
+        shift: false,
+    },
+};
+
 /// Terminal type advertised to the child (via `TERM`) and stored in the cast
 /// header. A full-screen TUI queries the terminfo database for this name to
 /// decide which cursor/screen-control escape sequences to emit. It must be a
@@ -83,6 +99,16 @@ pub enum Action {
     Marker { label: String },
     /// Inserts a comment (caption) event.
     Comment { comment: String },
+    /// Types a throwaway note into the terminal, shows it briefly, then wipes
+    /// the whole line with `Ctrl-U` before continuing.
+    ///
+    /// A shortcut for the common `Text("# ...") + Wait + Ctrl-U + Wait`
+    /// four-action pattern used to flash an on-screen note (unlike `Comment`,
+    /// which is a cast caption and never typed into the terminal). The `text` is
+    /// typed verbatim (so include your own `# ` prefix if you want it to look
+    /// like a shell comment), lingers for `show` seconds, is cleared with
+    /// `Ctrl-U`, then settles for another `show` seconds.
+    InlineComment { text: String, show: f64 },
     /// Sends a sequence of named keys (e.g. `Down`, `Enter`, `Esc`) in order.
     ///
     /// A single `Key` action can queue several keypresses: either the legacy
@@ -125,6 +151,7 @@ impl Action {
             Action::Input { text, .. } => format!("type {text:?}"),
             Action::Marker { label } => format!("marker {label:?}"),
             Action::Comment { comment } => format!("comment {comment:?}"),
+            Action::InlineComment { text, .. } => format!("inline comment {text:?}"),
             Action::Key { keys } => {
                 let names: Vec<String> = keys.iter().map(|k| k.label()).collect();
                 format!("key {}", names.join(" "))
@@ -708,6 +735,27 @@ impl<'de> Deserialize<'de> for Action {
                     "Comment" => Action::Comment {
                         comment: map.next_value()?,
                     },
+                    // `InlineComment: "# note"` — type the note, flash it, then
+                    // wipe it with Ctrl-U. The mapping form `InlineComment: {text:
+                    // "..", show: 1.0}` overrides how long it lingers.
+                    "InlineComment" => {
+                        let raw: InlineCommentField = map.next_value()?;
+                        let (text, show) = match raw {
+                            InlineCommentField::Text(text) => {
+                                (text, DEFAULT_INLINE_COMMENT_SHOW)
+                            }
+                            InlineCommentField::Full { text, show } => (text, show),
+                        };
+                        if text.is_empty() {
+                            return Err(de::Error::custom(
+                                "`InlineComment` text must not be empty",
+                            ));
+                        }
+                        if show < 0.0 {
+                            return Err(de::Error::custom("InlineComment show must be >= 0"));
+                        }
+                        Action::InlineComment { text, show }
+                    }
                     // `Keys: [Down, Down, Enter]` — a sequence of named keys sent
                     // in order (queue several distinct keys in one action).
                     "Keys" => {
@@ -837,6 +885,24 @@ impl Serialize for Action {
                 map.serialize_entry("Comment", comment)?;
                 map.end()
             }
+            Action::InlineComment { text, show } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                // Emit the bare-string form when the show duration is the
+                // default, so the common case stays terse; otherwise emit the
+                // mapping so the custom duration round-trips.
+                if *show == DEFAULT_INLINE_COMMENT_SHOW {
+                    map.serialize_entry("InlineComment", text)?;
+                } else {
+                    map.serialize_entry(
+                        "InlineComment",
+                        &InlineCommentPayload {
+                            text: text.clone(),
+                            show: *show,
+                        },
+                    )?;
+                }
+                map.end()
+            }
             Action::Key { keys } => {
                 let labels: Vec<String> = keys.iter().map(|k| k.label()).collect();
                 let mut map = serializer.serialize_map(Some(1))?;
@@ -898,6 +964,24 @@ enum ExpectField {
 struct ExpectPayload {
     text: String,
     timeout: f64,
+}
+
+/// The value of an `InlineComment:` action: either a bare string (typed with the
+/// default show duration) or a `{text, show}` mapping overriding how long the
+/// note lingers before it is wiped.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum InlineCommentField {
+    Text(String),
+    Full { text: String, show: f64 },
+}
+
+/// The `{text, show}` mapping form written when an `InlineComment` action carries
+/// a non-default show duration, so a produced script round-trips.
+#[derive(Debug, Serialize)]
+struct InlineCommentPayload {
+    text: String,
+    show: f64,
 }
 
 /// Default sudo password prompts matched (case-insensitively) against the
@@ -1356,6 +1440,37 @@ impl Script {
                         top: self.comments_at_top,
                         comment: comment.clone(),
                     });
+                }
+                Action::InlineComment { text, show } => {
+                    // Type the note (no trailing newline — it is never
+                    // submitted), let it linger, then wipe the whole line with
+                    // Ctrl-U and settle. This is the `Text + Wait + Ctrl-U +
+                    // Wait` pattern collapsed into one action.
+                    send_line(
+                        &mut session,
+                        text,
+                        &mut rng,
+                        self.typing_delay,
+                        (0.0, 0.0),
+                        (0.0, 0.0),
+                        &mut output_chunks,
+                        watch,
+                    )?;
+                    sleep(Duration::from_secs_f64(*show));
+                    mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
+                    send_keys(
+                        &mut session,
+                        &[CTRL_U],
+                        &mut rng,
+                        self.key_delay,
+                        &mut output_chunks,
+                        watch,
+                    )?;
+                    sleep(Duration::from_secs_f64(*show));
+                    mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
+                    // Nothing was submitted, so no newline shift for a following
+                    // marker/comment.
+                    newline_delay = 0.0;
                 }
                 Action::Key { keys } => {
                     send_keys(
@@ -2277,6 +2392,14 @@ mod tests {
             Action::Comment {
                 comment: "a caption".to_string(),
             },
+            Action::InlineComment {
+                text: "# a note".to_string(),
+                show: DEFAULT_INLINE_COMMENT_SHOW,
+            },
+            Action::InlineComment {
+                text: "# lingers longer".to_string(),
+                show: 1.5,
+            },
             Action::Key {
                 keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
             },
@@ -2535,6 +2658,63 @@ actions:
         .unwrap();
         assert!(yaml.contains("Expect"), "unexpected Expect serialization: {yaml}");
         assert!(!yaml.contains("timeout"), "default timeout should be omitted: {yaml}");
+    }
+
+    #[test]
+    fn parse_inline_comment_scalar_uses_default_show() {
+        // `InlineComment: "# note"` types the note, flashes it, and wipes it,
+        // using the default show duration.
+        let yaml = script_yaml_with_actions("- InlineComment: \"# a note\"");
+        let script: Script =
+            serde_yaml::from_str(&yaml).expect("should parse InlineComment action");
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# a note".to_string(),
+                show: DEFAULT_INLINE_COMMENT_SHOW,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_inline_comment_mapping_overrides_show() {
+        // The `{text, show}` mapping form overrides the default show duration.
+        let yaml =
+            script_yaml_with_actions("- InlineComment: {text: \"# note\", show: 1.5}");
+        let script: Script =
+            serde_yaml::from_str(&yaml).expect("should parse InlineComment mapping");
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# note".to_string(),
+                show: 1.5,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_inline_comment_empty_text_fails() {
+        // An empty note is rejected (nothing to type or wipe).
+        let yaml = script_yaml_with_actions("- InlineComment: \"\"");
+        let err = serde_yaml::from_str::<Script>(&yaml)
+            .expect_err("empty InlineComment text should fail to parse");
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn inline_comment_default_serializes_as_bare_scalar() {
+        // A default-show InlineComment serializes to the terse
+        // `InlineComment: "# note"` form, not the `{text, show}` mapping.
+        let yaml = serde_yaml::to_string(&Action::InlineComment {
+            text: "# a note".to_string(),
+            show: DEFAULT_INLINE_COMMENT_SHOW,
+        })
+        .unwrap();
+        assert!(
+            yaml.contains("InlineComment"),
+            "unexpected InlineComment serialization: {yaml}"
+        );
+        assert!(!yaml.contains("show"), "default show should be omitted: {yaml}");
     }
 
     #[test]

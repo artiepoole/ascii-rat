@@ -138,11 +138,19 @@ impl Decoder {
     fn try_resolve_simple(&mut self) -> bool {
         let first = self.pending[0];
 
-        // Named single-byte keys (Enter, Tab, Backspace, Space).
-        if let Some(key) = Key::from_bytes(&[first]) {
-            self.pending.remove(0);
-            self.push_key(key);
-            return true;
+        // A plain space (0x20) is deliberately NOT decoded as the `Space` key:
+        // it is a printable character, so it collapses into the surrounding
+        // `Text` action (a typed " ") rather than splitting words into separate
+        // actions. `Space:` remains a valid *hand-written* key, but the recorder
+        // never emits it. (This does not affect `Ctrl-Space`, whose NUL byte is
+        // handled via the control-byte path.)
+        if first != b' ' {
+            // Named single-byte keys (Enter, Tab, Backspace).
+            if let Some(key) = Key::from_bytes(&[first]) {
+                self.pending.remove(0);
+                self.push_key(key);
+                return true;
+            }
         }
 
         // A line feed (`\n`, 0x0a) is treated as Enter too: `KeyName::Enter`
@@ -312,6 +320,20 @@ mod tests {
         d.feed(b"ls", at(base, 0));
         let actions = d.finish();
         assert_eq!(actions, vec![Action::Text("ls".to_string())]);
+    }
+
+    #[test]
+    fn spaces_stay_in_text_and_do_not_become_space_keys() {
+        // Typing several words separated by spaces must stay one `Text` action,
+        // spaces included — the recorder never emits a `Space` key.
+        let base = Instant::now();
+        let mut d = Decoder::new(10_000, 0);
+        d.feed(b"echo recorded by ascii-rat", at(base, 0));
+        let actions = d.finish();
+        assert_eq!(
+            actions,
+            vec![Action::Text("echo recorded by ascii-rat".to_string())]
+        );
     }
 
     #[test]

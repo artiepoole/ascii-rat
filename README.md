@@ -194,10 +194,10 @@ Key options:
 | `-m`, `--print-markers` | Print the cast's markers as a Markdown list. |
 | `--data-id <ID>` | HTML element id to associate with the marker list (used with `--print-markers`). |
 
-Example — record the demo script shipped in this repo and watch it happen:
+Example — replay one of the scripts shipped in this repo and watch it happen:
 
 ```bash
-ascii-rat-bard --watch demo.yaml
+ascii-rat-bard --watch examples/hello-world.yaml
 ```
 
 If the script has a top-level `sudo:` block, `ascii-rat-bard` prompts once for
@@ -267,7 +267,9 @@ password visible anywhere in the recording.
 
 ## The script format (`demo.yaml`)
 
-A script has a small header followed by a list of `actions`. Here is a minimal
+A script has a small header followed by a list of `actions`. This section walks
+through the common forms; for an exhaustive reference of every header field,
+action, and filter keyword see [`format.md`](format.md). Here is a minimal
 hand-written example:
 
 ```yaml
@@ -296,6 +298,9 @@ Notable action forms:
 - **`Marker:`** → an asciicast marker (chapter point); list them with
   `ascii-rat-bard --dont-run --print-markers`.
 - **`Comment:`** → a caption/comment event.
+- **`InlineComment:`** → type a note on screen, flash it, then wipe the line with
+  `Ctrl-U` — a shortcut for the `Text + Wait + Ctrl-U + Wait` pattern (unlike
+  `Comment:`, it is really typed into the terminal). See [`format.md`](format.md#inlinecomment).
 - **A named key** (`Enter:`, `Esc:`, `Down:`, `Tab:`, …) → one keypress; add a
   count to repeat it (`Down: 6`, `Esc: 2`). See [`keys.md`](keys.md) for the full
   list of special key names (and aliases such as `PgDn`).
@@ -327,7 +332,7 @@ to return, or a nested `ascii-rat-bard` replay to complete. Unlike a fixed
 takes longer (or fires early when it is quick):
 
 ```yaml
-- "ascii-rat-bard --watch inner-demo.yaml; echo __DONE__"
+- "ascii-rat-bard --watch level2.yaml; echo __DONE__"
 - Enter:
 - Expect: "__DONE__"   # continue only once the marker is printed
 - "next command"
@@ -352,7 +357,13 @@ Timing/header fields:
 - Each delay can be spelled in seconds (`typing_delay:`) or milliseconds
   (`typing_delay_ms:`) — use one, not both.
 - Available delays: `start_delay`, `end_delay`, `typing_delay`, `pre_nl_delay`,
-  `post_nl_delay`, `key_delay` (each also has a `_ms` form).
+  `post_nl_delay`, `key_delay` (each also has a `_ms` form). `key_delay` is the
+  pause after each keypress sent by a `Key`/`Keys` action.
+- `with_comments:` renders `Comment` actions as captions (off by default);
+  `comments_at_top:` anchors those captions at the top of the screen instead of
+  the bottom.
+- `filters:` is an optional list of post-processing passes (regex scrubbing,
+  trimming to a start/end marker) — see [`format.md`](format.md#filters).
 - `sudo:` enables sudo password handling. Use `true` to match the built-in
   prompts (`assword`, `[sudo]`), or a mapping with a custom `prompts:` list when
   your prompt differs, e.g.:
@@ -367,7 +378,9 @@ Timing/header fields:
   Either way, `ascii-rat-bard` asks for the password once (hidden) at record
   time and types it when a listed prompt appears; see the sudo subsection above.
 
-See the [`examples/`](examples) directory for full, ready-to-run scripts.
+For a complete reference of every header field and action form, see
+[`format.md`](format.md). See the [`examples/`](examples) directory for full,
+ready-to-run scripts.
 
 ## Examples
 
@@ -402,7 +415,7 @@ ascii-rat-bard --watch examples/demo-ception.yaml
 ```
 
 It needs `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` on `PATH`, and writes
-its inner recording to `inner-demo.yaml` / `inner-demo.cast` in whatever
+its inner recording to `level2.yaml` / `level2.cast` in whatever
 directory you run it from (both safe to delete). It also shows off modifier keys
 such as `Ctrl-O`, `Ctrl-X`, and `Ctrl-End` to drive the editor — see
 [`keys.md`](keys.md).
