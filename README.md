@@ -211,6 +211,60 @@ Play the finished recording back with any asciicast player, e.g.:
 asciinema play demo.cast
 ```
 
+#### Recording commands that need `sudo`
+
+Full-screen setup tools and system commands often need root, and typing a
+password by hand ruins a scripted, reproducible recording. `ascii-rat` handles
+this for you: add a top-level `sudo:` field to the script and `ascii-rat-bard`
+takes care of the password prompt while it records.
+
+How it works:
+
+- Before recording starts, `ascii-rat-bard` asks you once for the password with
+  a hidden prompt (`Sudo password:`). This needs an interactive terminal.
+- While recording, it watches the child's output; when a sudo password prompt
+  appears it types the password (character by character) followed by Enter, so
+  the recording flows as if a person answered the prompt.
+- The password is never written to the script or the `.cast`. It only lives in
+  memory for the duration of the run.
+- By default it matches the standard prompts (the substrings `assword` and
+  `[sudo]`, case-insensitively). If your prompt is unusual, give `sudo:` a
+  mapping with your own `prompts:` list instead of `true` (see the script format
+  below).
+
+A minimal `sudo whoami` script (this is [`examples/sudo-command.yaml`](examples/sudo-command.yaml)):
+
+```yaml
+output_file: "sudo-whoami.cast"
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 500
+typing_delay_ms: [30, 70]
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+with_comments: true          # so the Comment: line below is rendered
+sudo: true                   # ask for the password once, type it at the prompt
+
+actions:
+  - Comment: "run a privileged command with sudo"
+  - "sudo whoami"
+  - Enter:
+  - Wait: 2.0                 # let sudo prompt, accept the password, print `root`
+  - "exit"
+  - Enter:
+  - END_REC:
+```
+
+Record it, entering your password at the hidden prompt when asked:
+
+```bash
+ascii-rat-bard --watch examples/sudo-command.yaml
+```
+
+The resulting cast shows `sudo whoami` being run and printing `root`, with no
+password visible anywhere in the recording.
+
 ## The script format (`demo.yaml`)
 
 A script has a small header followed by a list of `actions`. Here is a minimal
@@ -257,8 +311,35 @@ Timing/header fields:
   (`typing_delay_ms:`) — use one, not both.
 - Available delays: `start_delay`, `end_delay`, `typing_delay`, `pre_nl_delay`,
   `post_nl_delay`, `key_delay` (each also has a `_ms` form).
-- `sudo:` accepts `true` (use the built-in prompt matchers) or a mapping with a
-  custom `prompts:` list.
+- `sudo:` enables sudo password handling. Use `true` to match the built-in
+  prompts (`assword`, `[sudo]`), or a mapping with a custom `prompts:` list when
+  your prompt differs, e.g.:
 
-See [`demo.yaml`](demo.yaml) in the repository root for a full, real-world
-example (the original `snap-rat` demo).
+  ```yaml
+  sudo:
+    prompts:
+      - "Password:"
+      - "authentication required"
+  ```
+
+  Either way, `ascii-rat-bard` asks for the password once (hidden) at record
+  time and types it when a listed prompt appears; see the sudo subsection above.
+
+See the [`examples/`](examples) directory for full, ready-to-run scripts.
+
+## Examples
+
+The [`examples/`](examples) directory holds small, ready-to-run scripts you can
+replay with `ascii-rat-bard`, each documented in [`examples/README.md`](examples/README.md):
+
+| Script | What it shows |
+| --- | --- |
+| [`hello-world.yaml`](examples/hello-world.yaml) | The smallest useful script — type two commands into a `bash` prompt and exit. |
+| [`sudo-command.yaml`](examples/sudo-command.yaml) | A privileged command via `sudo: true`, with the password typed at the sudo prompt. |
+| [`scribe-records-htop.yaml`](examples/scribe-records-htop.yaml) | A meta-demo whose replay drives `ascii-rat-scribe` recording an `htop` session. |
+
+Play any of them, for example:
+
+```bash
+ascii-rat-bard --watch examples/hello-world.yaml
+```
