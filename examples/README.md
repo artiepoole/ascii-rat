@@ -1,7 +1,7 @@
 # Examples
 
-Hand-written example scripts for `ascii-rat-bard`. Each is a `demo.yaml`-style
-script you can replay into a `.cast` file. Play any of them with:
+Hand-written example scripts for `ascii-rat-bard`. Each is a script you can
+replay into a `.cast` file. Play any of them with:
 
 ```bash
 ascii-rat-bard --watch examples/<name>.yaml
@@ -33,11 +33,26 @@ cargo run --release --bin ascii-rat-bard -- examples/hello-world.yaml
 | [`hello-world.yaml`](hello-world.yaml) | The smallest useful script — type two commands into a `bash` prompt and exit. Good starting point. |
 | [`sudo-command.yaml`](sudo-command.yaml) | A privileged command via `sudo: true`; `ascii-rat-bard` prompts once for the password and types it when sudo asks. |
 | [`scribe-records-htop.yaml`](scribe-records-htop.yaml) | A meta-demo: the replay drives `ascii-rat-scribe` recording an `htop` session, so the resulting cast shows how to use the recorder on `htop`. |
+| [`demo-ception.yaml`](demo-ception.yaml) | The flagship "demo-ception": a single cast that records a new script with `ascii-rat-scribe`, edits it in `nano`, and replays it with `ascii-rat-bard`. See below. |
 
-For the flagship "demo-ception" — a single cast that records a new script with
-`ascii-rat-scribe`, edits it in `nano`, and replays it with `ascii-rat-bard` —
-see [`demo.yaml`](../demo.yaml) in the repository root and its entry in the
-[top-level README](../README.md).
+## `demo-ception.yaml` in detail
+
+This is the flagship demo — a demo of making a demo. When replayed with
+`ascii-rat-bard --watch demo-ception.yaml`, it drives a shell and, on screen,
+uses `ascii-rat` itself to:
+
+1. record a brand-new script with `ascii-rat-scribe`,
+2. tweak that script by hand in `nano`, and
+3. replay the edited script with `ascii-rat-bard` to produce a cast.
+
+All three steps happen inside the one top-level cast, so a viewer watches
+`ascii-rat` record, edit, and play back a recording without leaving it.
+
+Requirements: `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` must all be on
+`PATH` at replay time. The inner recording is written to `inner-demo.yaml` /
+`inner-demo.cast` in whatever directory you run the demo from (both are safe to
+delete afterwards). A ready-made [`inner-demo.yaml`](inner-demo.yaml) sits next
+to this demo as a reference of what that inner recording looks like once edited.
 
 ## `scribe-records-htop.yaml` in detail
 

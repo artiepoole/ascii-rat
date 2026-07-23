@@ -1,0 +1,216 @@
+# demo-ception.yaml — the top-level "demo-ception" demo.
+#
+# This is the flagship ascii-rat demo: a single recording that shows the whole
+# workflow end to end, all inside one cast. When ascii-rat-bard replays this
+# script it drives a shell and, on screen, uses ascii-rat itself to:
+#
+#   1. record a brand-new script with ascii-rat-scribe,
+#   2. tweak that script by hand in an editor (nano), and
+#   3. replay the edited script with ascii-rat-bard to produce a cast.
+#
+# In other words, it is a demo of making a demo — a viewer watches ascii-rat
+# record, edit, and play back a recording without leaving the top-level cast.
+#
+# Play it with:
+#   ascii-rat-bard --watch examples/demo-ception.yaml
+#
+# Requirements: `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` must all be on
+# PATH at replay time. Build the workspace and put target/release on PATH:
+#   cargo build --release
+#   export PATH="$PWD/target/release:$PATH"
+# If the binaries are not on PATH, replace `ascii-rat-scribe` / `ascii-rat-bard`
+# in the actions below with the full path to each binary.
+#
+# The inner recording is written to inner-demo.yaml / inner-demo.cast next to
+# wherever you run this from; both are safe to delete afterwards.
+
+output_file: "demoception.cast"
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 800
+typing_delay_ms: [40, 90]
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+# Comment: actions require comments to be enabled so they are rendered.
+with_comments: true
+# Give each scripted keypress (Enter, Ctrl-U, Ctrl-O, Ctrl-X, ...) a moment so
+# the editor and child programs keep up on playback.
+key_delay: [0.15, 0.25]
+
+actions:
+  # Start from a clean screen so the top-level demo does not begin cluttered
+  # with whatever was on the terminal before playback.
+  - "clear"
+  - Enter:
+  - Wait: 0.5
+
+  # ---------------------------------------------------------------------------
+  # Act 1 — record a new script with ascii-rat-scribe.
+  # ---------------------------------------------------------------------------
+  - Marker: "record a new script with the scribe"
+  - Comment: "step 1: record a session with ascii-rat-scribe"
+  # Launch the recorder on a clean, config-free shell so what we type is all
+  # that gets captured into inner-demo.yaml. We pass fast timing flags so the
+  # RECORDED script is snappy on playback: --typing-delay-ms 25 gives quick
+  # per-character typing, and --round-wait-ms 250 keeps any captured waits
+  # short and tidy. Without these the inner replay in Act 3 is sluggish, since
+  # it faithfully reproduces the scribe's default 75ms typing and every pause.
+  - "ascii-rat-scribe --typing-delay-ms 25 --round-wait-ms 250 -o inner-demo.yaml --cast inner-demo.cast"
+  - Enter:
+  # Wait for the recorder to spawn its inner shell prompt.
+  - Wait: 1.5
+  # Clear the recorded shell too, so the inner demo we are recording also starts
+  # from a clean screen. This `clear` is captured into inner-demo.yaml.
+  - "clear"
+  - Enter:
+  - Wait: 0.8
+
+  - Comment: "type a throwaway note, then delete it"
+  # Type an inline shell comment as a note to the viewer, then wipe it out
+  # before running anything — a comment without using the `Comment:` action.
+  # Ctrl-U is the terminal "kill line" combo: it clears the whole line before
+  # the cursor in one keypress, so there is no need to hold Backspace.
+  # Keep these on-screen pauses short: the scribe records idle gaps into
+  # inner-demo.yaml as `Wait` actions, so long pauses here would make the inner
+  # replay in Act 3 drag. Short gaps stay readable but keep the recording brisk.
+  - "# this is a comment"
+  - Wait: 0.4
+  - Ctrl-U:
+  - Wait: 0.4
+
+  - Comment: "type a command into the recorded shell"
+  # Everything typed here is being captured by the scribe.
+  - "echo recorded by ascii-rat"
+  - Enter:
+  - Wait: 0.4
+  # Leaving the inner shell ends the recorded command, so the scribe writes
+  # inner-demo.yaml and exits.
+  - "exit"
+  - Enter:
+  - Wait: 1.5
+  - Comment: "the scribe wrote inner-demo.yaml"
+
+  # ---------------------------------------------------------------------------
+  # Act 2 — edit the recorded script by hand in nano.
+  # ---------------------------------------------------------------------------
+  - Marker: "edit the recorded script in nano"
+  - Comment: "step 2: tweak inner-demo.yaml in an editor"
+  - "nano inner-demo.yaml"
+  - Enter:
+  # Let nano draw its full-screen editor.
+  - Wait: 2.0
+  # Add a Comment action as the very first action in the recording, so the edit
+  # lands right at the top of the script (one line below `actions:`). We use
+  # nano's "Where Is" search (Ctrl-W) to jump straight to the `actions:` line,
+  # press Enter to jump to the match, then End to move to the end of that line.
+  # Pressing Enter there opens a fresh blank line immediately below `actions:`;
+  # we type our new action (at column 0, matching how the scribe writes each
+  # action) so it becomes the first list item and pushes the rest down, keeping
+  # the YAML valid.
+  - Ctrl-W:
+  - Wait: 0.4
+  - "actions:"
+  - Enter:
+  - Wait: 0.5
+  - End:
+  - Wait: 0.3
+  - Enter:
+  - Wait: 0.3
+  - "- Comment: \"edited by hand in nano\""
+  - Wait: 1.0
+  # Save the file: Ctrl-O (WriteOut), confirm the filename with Enter.
+  - Comment: "save with Ctrl-O"
+  - Ctrl-O:
+  - Wait: 0.8
+  - Enter:
+  - Wait: 0.8
+  # Exit nano: Ctrl-X.
+  - Comment: "quit nano with Ctrl-X"
+  - Ctrl-X:
+  - Wait: 1.5
+
+  # ---------------------------------------------------------------------------
+  # Act 3 — replay the edited script with ascii-rat-bard.
+  # ---------------------------------------------------------------------------
+  - Marker: "record the edited script"
+  - Comment: "step 3: record inner-demo.yaml with ascii-rat-bard"
+  # Replay the script we just recorded and edited; --watch mirrors it live so
+  # the viewer sees the playback happen inside this top-level cast.
+  #
+  # We append `; echo __DONE__` as a synchronization marker and then use
+  # `Expect` to block until it actually appears. A bare `Wait` is not enough on
+  # its own: the inner `ascii-rat-bard --watch` is a foreground child of this
+  # shell, and its mirrored output can still be draining to our terminal after
+  # a fixed wait elapses — so the next act would type on top of the inner
+  # playback's tail. Chaining `echo __DONE__` makes the shell print the marker
+  # only AFTER the inner bard has fully exited and its output has drained;
+  # `Expect` then pauses this script until that marker is seen, so it
+  # synchronizes on real output rather than guessing a duration. Anything typed
+  # after `Expect` returns cannot interleave with the inner playback.
+  #
+  # First, type a `#` shell comment as an on-screen note to the viewer, let it
+  # sit briefly, then wipe it with Ctrl-U before running anything, so it never
+  # actually executes. Unlike the `Comment:` action (which becomes a cast
+  # caption), this note is printed into the terminal output itself, so it shows
+  # up on screen as the demo plays.
+  - "# now replay the recorded script, using `Expect:` to wait for __DONE__ before we continue"
+  - Wait: 0.6
+  - Ctrl-U:
+  - Wait: 0.4
+  - "# The playback looks weird here due to nested demo-ing - it is normally smooth."
+  - Wait: 0.6
+  - Ctrl-U:
+  - Wait: 0.4
+  - "ascii-rat-bard --watch inner-demo.yaml; echo __DONE__"
+  - Enter:
+  # Block until the marker is printed (i.e. the inner replay is completely
+  # finished). Falls back to the default timeout if it never appears.
+  - Expect: "__DONE__"
+  - Comment: "preview the inner-demo recording"
+  # Play the cast the inner bard just wrote. ascii-rat-bard resolves a script's
+  # `output_file` relative to the script's own directory, so replaying
+  # `inner-demo.yaml` (whose `output_file` is `inner-demo.cast`) writes the cast
+  # next to it — here, this repository directory we cd'd into in Act 1. Use that
+  # same relative path (NOT `~/inner-demo.cast`): the cast is never written to
+  # your home directory, so a `~/` path would fail to find it.
+  #
+  # As with the replay above, chain `; echo __DONE__` and `Expect` on it so we
+  # block until `asciinema play` has fully finished and drained its output,
+  # rather than guessing a fixed `Wait` that could let the next act type over
+  # the tail of the playback.
+  - "asciinema play inner-demo.cast; echo __DONE__"
+  - Enter:
+  # Block until the marker is printed (i.e. the cast playback is complete).
+  # Falls back to the default timeout if it never appears.
+  - Expect: "__DONE__"
+  - Comment: "demo-ception complete: recorded, edited, and replayed"
+  - Wait: 1.0
+
+  # Clear the screen before the final act. The inner `ascii-rat-bard --watch`
+  # above can emit its last frames slightly after it returns control, so a
+  # clear here guarantees Act 4 starts on a clean line and its typing cannot
+  # interleave with any late output from the inner playback.
+  - "clear"
+  - Enter:
+  - Wait: 0.8
+
+  # ---------------------------------------------------------------------------
+  # Act 4 — show how you *would* share the cast, without actually uploading.
+  # ---------------------------------------------------------------------------
+  - Marker: "show the asciinema upload command"
+  - Comment: "this is how you would upload the cast to asciinema.org"
+  - "# upload the cast to asciinema.org"
+  - Ctrl-U:
+  # Type the upload command so the viewer sees it, but do NOT press Enter — hit
+  # Ctrl-U (kill line) instead to wipe it, so nothing is actually uploaded.
+  - "asciinema upload inner-demo.cast"
+  - Wait: 1.5
+  - Comment: "press Ctrl-U instead of Enter, so it is not actually sent"
+  - Ctrl-U:
+  - Wait: 1.0
+
+  # Leave the shell that ascii-rat-bard launched us in.
+  - "exit"
+  - Enter:
+  - END_REC:

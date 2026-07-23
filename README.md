@@ -305,7 +305,45 @@ Notable action forms:
 - **`Keys: [Down, Enter]`** → send several named keys once each, in order (combos
   work here too, e.g. `Keys: [Ctrl-O, Enter, Ctrl-X]`).
 - **`Wait: <seconds>`** → pause while still capturing the child's output.
+- **`Expect: "<substr>"`** → block until that substring appears in the child's
+  output, then continue (see below). A synchronization primitive: wait for what
+  the terminal actually prints instead of guessing a fixed `Wait`.
 - **`END_REC:`** → end the recording; anything after it is ignored.
+
+#### Waiting for output with `Expect`
+
+`Expect` pauses the script until an expected substring shows up in the child's
+output, then continues. Matching is case-insensitive, and everything printed
+while waiting is still captured into the cast (and, under `--watch`, mirrored to
+your terminal live as it arrives, so a long `Expect` shows the child's output as
+it happens rather than freezing and dumping it all at once when the match lands).
+If the substring never appears the script gives up after a timeout (default 30
+seconds) rather than hanging forever.
+
+Use it whenever the next action must not run until something has actually
+happened on screen — for example waiting for a long command to finish, a prompt
+to return, or a nested `ascii-rat-bard` replay to complete. Unlike a fixed
+`Wait`, it synchronizes on real output, so it never races ahead when a step
+takes longer (or fires early when it is quick):
+
+```yaml
+- "ascii-rat-bard --watch inner-demo.yaml; echo __DONE__"
+- Enter:
+- Expect: "__DONE__"   # continue only once the marker is printed
+- "next command"
+```
+
+To override the timeout, use the mapping form:
+
+```yaml
+- Expect: { text: "Server started", timeout: 60 }
+```
+
+`Expect` only watches output produced after it begins, so it deliberately
+ignores the terminal's echo of the command line that triggered it (the typed
+`... ; echo __DONE__` contains `__DONE__` before the command has run). Put the
+`Expect` after the `Enter` that submits the command whose output you are waiting
+for.
 
 Timing/header fields:
 
@@ -341,6 +379,7 @@ replay with `ascii-rat-bard`, each documented in [`examples/README.md`](examples
 | [`hello-world.yaml`](examples/hello-world.yaml) | The smallest useful script — type two commands into a `bash` prompt and exit. |
 | [`sudo-command.yaml`](examples/sudo-command.yaml) | A privileged command via `sudo: true`, with the password typed at the sudo prompt. |
 | [`scribe-records-htop.yaml`](examples/scribe-records-htop.yaml) | A meta-demo whose replay drives `ascii-rat-scribe` recording an `htop` session. |
+| [`demo-ception.yaml`](examples/demo-ception.yaml) | The flagship "demo-ception": records a new script with `ascii-rat-scribe`, edits it in `nano`, and replays it with `ascii-rat-bard`, all in one cast. |
 
 Play any of them, for example:
 
@@ -348,9 +387,10 @@ Play any of them, for example:
 ascii-rat-bard --watch examples/hello-world.yaml
 ```
 
-### The top-level demo (`demo.yaml`)
+### The flagship demo (`demo-ception.yaml`)
 
-The repository root holds [`demo.yaml`](demo.yaml), the flagship "demo-ception"
+The [`examples/`](examples) directory holds
+[`demo-ception.yaml`](examples/demo-ception.yaml), the flagship "demo-ception"
 demo: a single recording that shows the whole `ascii-rat` workflow end to end,
 inside one cast. When replayed it drives a shell and, on screen, uses
 `ascii-rat` itself to record a new script with `ascii-rat-scribe`, edit that
@@ -358,10 +398,11 @@ script by hand in `nano`, and replay the edited script with `ascii-rat-bard` —
 a demo of making a demo.
 
 ```bash
-ascii-rat-bard --watch demo.yaml
+ascii-rat-bard --watch examples/demo-ception.yaml
 ```
 
 It needs `ascii-rat-scribe`, `ascii-rat-bard`, and `nano` on `PATH`, and writes
-its inner recording to `inner-demo.yaml` / `inner-demo.cast` (both safe to
-delete). It also shows off modifier keys such as `Ctrl-O`, `Ctrl-X`, and
-`Ctrl-End` to drive the editor — see [`keys.md`](keys.md).
+its inner recording to `inner-demo.yaml` / `inner-demo.cast` in whatever
+directory you run it from (both safe to delete). It also shows off modifier keys
+such as `Ctrl-O`, `Ctrl-X`, and `Ctrl-End` to drive the editor — see
+[`keys.md`](keys.md).

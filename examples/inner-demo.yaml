@@ -1,0 +1,51 @@
+output_file: inner-demo.cast
+cols: 100
+rows: 30
+start_delay_ms: 500
+end_delay_ms: 500
+typing_delay_ms: 25
+pre_nl_delay_ms: 200
+post_nl_delay_ms: 500
+actions:
+- Comment: "edited by hand in nano"
+- clear
+- Wait: 0.75
+- Keys:
+  - Enter
+- Wait: 1.0
+- '#'
+- Keys:
+  - Space
+- this
+- Keys:
+  - Space
+- is
+- Keys:
+  - Space
+- a
+- Keys:
+  - Space
+- comment
+- Wait: 1.25
+- Keys:
+  - Ctrl-u
+- Wait: 0.5
+- echo
+- Keys:
+  - Space
+- recorded
+- Keys:
+  - Space
+- by
+- Keys:
+  - Space
+- ascii-rat
+- Wait: 0.75
+- Keys:
+  - Enter
+- Wait: 0.5
+- exit
+- Wait: 0.75
+- Keys:
+  - Enter
+- END_REC: null
