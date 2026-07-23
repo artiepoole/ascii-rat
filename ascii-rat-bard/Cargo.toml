@@ -1,0 +1,15 @@
+[package]
+name = "ascii-rat-bard"
+version.workspace = true
+edition.workspace = true
+description = "Playback tool: reads a YAML demo script and records a terminal session into an asciicast v2 .cast file"
+
+[[bin]]
+name = "ascii-rat-bard"
+path = "src/main.rs"
+
+[dependencies]
+ascii-rat-stage = { path = "../ascii-rat-stage" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+rpassword = { workspace = true }

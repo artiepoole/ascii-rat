@@ -1,0 +1,18 @@
+[package]
+name = "ascii-rat-stage"
+version.workspace = true
+edition.workspace = true
+description = "Shared library for the ascii-rat tools: asciicast, scripted actions, PTY, filters, and utilities"
+
+[lib]
+name = "ascii_rat_stage"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+portable-pty = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+anyhow = { workspace = true }

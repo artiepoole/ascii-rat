@@ -1,0 +1,17 @@
+[package]
+name = "ascii-rat-scribe"
+version.workspace = true
+edition.workspace = true
+description = "Recorder tool: captures live terminal input and emits a demo.yaml script for ascii-rat-bard"
+
+[[bin]]
+name = "ascii-rat-scribe"
+path = "src/main.rs"
+
+[dependencies]
+ascii-rat-stage = { path = "../ascii-rat-stage" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+crossterm = { workspace = true }
