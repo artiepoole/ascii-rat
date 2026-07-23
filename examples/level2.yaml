@@ -7,6 +7,7 @@ end_delay_ms: 500
 typing_delay_ms: 50
 pre_nl_delay_ms: 200
 post_nl_delay_ms: 500
+with_comments: true
 actions:
 - Comment: "edited by hand in nano"
 - InlineComment: "# edited by hand in nano"
