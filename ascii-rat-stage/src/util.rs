@@ -2,6 +2,16 @@
 
 use crate::cast::{AsciiCast, Event};
 
+/// The platform's default interactive shell (`$SHELL`/`bash` on Unix,
+/// `%COMSPEC%`/`cmd.exe` on Windows).
+pub fn default_shell() -> String {
+    if cfg!(windows) {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+
 /// Build the Markdown seek-link lines for every marker in the cast.
 ///
 /// Mirrors `util.py::marker_md_list`.

@@ -7,6 +7,7 @@
 use crate::cast::{AsciiCast, Event, Header};
 use crate::filters::Filter;
 use crate::pty::{OutputChunk, PtySession};
+use crate::util;
 use anyhow::{Context, Result};
 use portable_pty::CommandBuilder;
 use rand::rngs::StdRng;
@@ -1337,8 +1338,8 @@ impl Script {
 
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
 
-        // Build the child command: the user's shell, fallback /bin/bash.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        // Build the child command: the platform's default shell.
+        let shell = util::default_shell();
         let mut cmd = CommandBuilder::new(&shell);
         // Advertise a capable terminal type so full-screen TUIs render with the
         // correct escape sequences instead of a scrambled stream (see

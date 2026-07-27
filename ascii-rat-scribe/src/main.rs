@@ -10,6 +10,7 @@ mod decoder;
 mod emit;
 
 use anyhow::Result;
+use ascii_rat_stage::util;
 use clap::Parser;
 use std::process::ExitCode;
 
@@ -52,8 +53,8 @@ struct Cli {
     typing_delay_ms: u64,
 
     /// The command (and its arguments) to run and record. Everything after
-    /// `--` is treated as the command line. If omitted, `bash` is recorded so
-    /// you get a clean terminal you can type into.
+    /// `--` is treated as the command line. If omitted, your default shell is
+    /// recorded so you get a clean terminal you can type into.
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
 }
@@ -70,7 +71,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     let command = if cli.command.is_empty() {
-        vec!["bash".to_string()]
+        vec![util::default_shell()]
     } else {
         cli.command.clone()
     };
