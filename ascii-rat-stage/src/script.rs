@@ -7,6 +7,7 @@
 use crate::cast::{AsciiCast, Event, Header};
 use crate::filters::Filter;
 use crate::pty::{OutputChunk, PtySession};
+use crate::util;
 use anyhow::{Context, Result};
 use portable_pty::CommandBuilder;
 use rand::rngs::StdRng;
@@ -1225,23 +1226,24 @@ impl<'de> Deserialize<'de> for Script {
 
         // `start_delay`/`end_delay` are conceptually single fixed values but go
         // through the same scalar-or-range parsing; a fixed number yields
-        // `(x, x)`. They are required (no default) like before.
+        // `(x, x)`. All delays fall back to the values `ascii-rat-scribe`
+        // writes, so a minimal hand-written script only needs `output_file`.
         let start_delay =
-            resolve_delay(raw.start_delay, raw.start_delay_ms, "start_delay", None)
+            resolve_delay(raw.start_delay, raw.start_delay_ms, "start_delay", Some((0.5, 0.5)))
                 .map_err(de::Error::custom)?;
-        let end_delay = resolve_delay(raw.end_delay, raw.end_delay_ms, "end_delay", None)
+        let end_delay = resolve_delay(raw.end_delay, raw.end_delay_ms, "end_delay", Some((0.5, 0.5)))
             .map_err(de::Error::custom)?;
         let typing_delay =
-            resolve_delay(raw.typing_delay, raw.typing_delay_ms, "typing_delay", None)
+            resolve_delay(raw.typing_delay, raw.typing_delay_ms, "typing_delay", Some((0.075, 0.075)))
                 .map_err(de::Error::custom)?;
         let pre_nl_delay =
-            resolve_delay(raw.pre_nl_delay, raw.pre_nl_delay_ms, "pre_nl_delay", None)
+            resolve_delay(raw.pre_nl_delay, raw.pre_nl_delay_ms, "pre_nl_delay", Some((0.2, 0.2)))
                 .map_err(de::Error::custom)?;
         let post_nl_delay = resolve_delay(
             raw.post_nl_delay,
             raw.post_nl_delay_ms,
             "post_nl_delay",
-            None,
+            Some((0.5, 0.5)),
         )
         .map_err(de::Error::custom)?;
         let key_delay = resolve_delay(
@@ -1337,8 +1339,8 @@ impl Script {
 
         let mut rng = StdRng::seed_from_u64(RNG_SEED);
 
-        // Build the child command: the user's shell, fallback /bin/bash.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        // Build the child command: the platform's default shell.
+        let shell = util::default_shell();
         let mut cmd = CommandBuilder::new(&shell);
         // Advertise a capable terminal type so full-screen TUIs render with the
         // correct escape sequences instead of a scrambled stream (see

@@ -1,0 +1,15 @@
+# CI smoke test for Windows: bard's default shell there is cmd.exe.
+# Types one echo, verifies it lands in the cast, exits.
+output_file: "windows-smoke.cast"
+cols: 100
+rows: 30
+typing_delay_ms: [10, 30]
+
+actions:
+  - Wait: 2.0                # let cmd.exe settle
+  - "echo hello-from-windows"
+  - Enter:
+  - Wait: 1.0
+  - "exit"
+  - Enter:
+  - END_REC:

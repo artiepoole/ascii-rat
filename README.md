@@ -75,6 +75,8 @@ starting point.
 ## Building
 
 Needs a recent stable [Rust toolchain](https://rustup.rs/) (edition 2024).
+Builds on Linux, macOS, and Windows (ConPTY); the `sudo:` feature and the
+bundled examples are Linux(Unix?)-only.
 
 ```bash
 cargo build --release   # binaries in target/release/
