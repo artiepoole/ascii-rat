@@ -25,3 +25,7 @@ target
 .junie
 *.cast
 *.demo
+opencode.json
+*.lock
+
+.workshop/
