@@ -9,6 +9,24 @@ session once into an editable script (or write the script by hand), then replay
 it deterministically into a clean `.cast`. Replay drives a real child process
 in a PTY, so full-screen TUIs render correctly and `sudo` works.
 
+## Key features
+
+What sets it apart from other scripted-recording tools:
+
+- **Record to YAML** — capture a live session into an editable script, retime and trim by hand, replay deterministically.
+- **Real PTY** — full-screen TUIs (`htop`, `nano`) render correctly; not a faked terminal.
+- **Key-timing jitter** — any delay can be a `[low, high]` random range for human-like typing.
+- **`sudo` passthrough** — answers password prompts during recording without storing the password.
+- **Modifier keys** — `Ctrl-O`, `Shift-Tab`, `Alt-x` and friends drive editors and TUIs.
+- **Key shorthand** — `Down: 6` repeats a keypress; `Keys: [Ctrl-O, Enter, Ctrl-X]` sends a sequence.
+
+Also table stakes, supported here too:
+
+- **Sync on output** — `Expect` waits for what the terminal actually prints instead of guessed `Wait`s.
+- **Output filters** — regex-scrub secrets and trim to markers after recording.
+- **Markers & captions** — asciicast chapter markers, plus `Comment`/`InlineComment` captions.
+- **Live watch** — `--watch` mirrors the recording to your terminal as it happens.
+
 ## Demo
 
 `ascii-rat` recording itself, one level at a time — each recording captures the
@@ -114,7 +132,7 @@ Full list: [`ascii-rat-bard/README.md`](ascii-rat-bard/README.md) or `--help`.
 
 ```bash
 ascii-rat-bard --watch examples/hello-world.yaml
-asciinema play demo.cast
+asciinema play examples/hello-world.cast
 ```
 
 ### `sudo`
