@@ -19,7 +19,7 @@ jobs:
       - run: cargo build --release --workspace
       - name: scribe-inside-bard end-to-end
         run: |
-          echo "$PWD/target/release" >> "$GITHUB_PATH"
+          export PATH="$GITHUB_WORKSPACE/target/release:$PATH"
           mkdir ~/rat-run && cd ~/rat-run
           cp "$GITHUB_WORKSPACE/.github/testdata/demo-ception-ci.yaml" .
           ascii-rat-bard --quiet demo-ception-ci.yaml
@@ -35,7 +35,7 @@ jobs:
       - run: cargo build --release --workspace
       - name: bard smoke test on cmd.exe
         run: |
-          echo "$env:GITHUB_WORKSPACE\target\release" >> $env:GITHUB_PATH
+          $env:PATH = "$env:GITHUB_WORKSPACE\target\release;$env:PATH"
           mkdir "$env:RUNNER_TEMP\rat-run" | Out-Null
           cd "$env:RUNNER_TEMP\rat-run"
           copy "$env:GITHUB_WORKSPACE\.github\testdata\windows-smoke.yaml" .
