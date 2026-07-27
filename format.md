@@ -45,14 +45,17 @@ its plain name or in milliseconds under the `_ms` twin — use one spelling, not
 both. Each value is either a single number, or a `[low, high]` list from which a
 random value is picked per use, for a human-like feel.
 
-| Field (seconds) | Field (ms) | Controls |
-| --- | --- | --- |
-| **`start_delay`** | `start_delay_ms` | Pause before the first action begins. |
-| **`end_delay`** | `end_delay_ms` | Pause after the last action before the child is closed. |
-| **`typing_delay`** | `typing_delay_ms` | Delay between characters when typing a string. |
-| **`pre_nl_delay`** | `pre_nl_delay_ms` | Delay before the newline at the end of a typed line. |
-| **`post_nl_delay`** | `post_nl_delay_ms` | Delay after that newline. |
-| **`key_delay`** | `key_delay_ms` | Delay after each keypress sent by a `Key`/`Keys` action. Defaults to a small built-in value when omitted. |
+| Field (seconds) | Field (ms) | Controls | Default (s) |
+| --- | --- | --- | --- |
+| **`start_delay`** | `start_delay_ms` | Pause before the first action begins. | 0.5 |
+| **`end_delay`** | `end_delay_ms` | Pause after the last action before the child is closed. | 0.5 |
+| **`typing_delay`** | `typing_delay_ms` | Delay between characters when typing a string. | 0.075 |
+| **`pre_nl_delay`** | `pre_nl_delay_ms` | Delay before the newline at the end of a typed line. | 0.2 |
+| **`post_nl_delay`** | `post_nl_delay_ms` | Delay after that newline. | 0.5 |
+| **`key_delay`** | `key_delay_ms` | Delay after each keypress sent by a `Key`/`Keys` action. | small built-in |
+
+All are optional; the defaults match what `ascii-rat-scribe` writes, so a
+minimal script only needs `output_file` (plus `cols`/`rows`).
 
 Examples:
 

@@ -1,0 +1,47 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --workspace
+
+  e2e-demo-ception:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --workspace
+      - name: scribe-inside-bard end-to-end
+        run: |
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+          mkdir ~/rat-run && cd ~/rat-run
+          cp "$GITHUB_WORKSPACE/.github/testdata/demo-ception-ci.yaml" .
+          ascii-rat-bard --quiet demo-ception-ci.yaml
+          test -s demo-ception-ci.cast
+          test -s level2.yaml
+          test -s level2.cast
+          grep -q "recorded by ascii-rat" level2.cast
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --workspace
+      - name: bard smoke test on cmd.exe
+        run: |
+          echo "$env:GITHUB_WORKSPACE\target\release" >> $env:GITHUB_PATH
+          mkdir "$env:RUNNER_TEMP\rat-run" | Out-Null
+          cd "$env:RUNNER_TEMP\rat-run"
+          copy "$env:GITHUB_WORKSPACE\.github\testdata\windows-smoke.yaml" .
+          ascii-rat-bard --quiet windows-smoke.yaml
+          if (-not (Select-String -Path windows-smoke.cast -Pattern "hello-from-windows" -Quiet)) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ascii-rat-windows
+          path: target/release/ascii-rat-*.exe

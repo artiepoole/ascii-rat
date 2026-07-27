@@ -1,0 +1,24 @@
+# CI end-to-end test: scribe inside bard (mini demo-ception).
+# bard replays this -> drives scribe to record level2.yaml -> replays level2
+# with bard -> exits. Fast timings; CI only cares that the files come out.
+output_file: "demo-ception-ci.cast"
+cols: 100
+rows: 30
+typing_delay_ms: [10, 30]
+
+actions:
+  - "ascii-rat-scribe --typing-delay-ms 10 --wait-threshold-ms 100 --round-wait-ms 0 -o level2.yaml --cast level2.cast"
+  - Enter:
+  - Wait: 2.0                # let scribe spawn its shell
+  - "echo recorded by ascii-rat"
+  - Enter:
+  - Wait: 0.5
+  - "exit"                   # ends scribe's shell; scribe writes level2.yaml
+  - Enter:
+  - Wait: 2.0
+  - "ascii-rat-bard level2.yaml; echo __DONE__"
+  - Enter:
+  - Expect: "__DONE__"
+  - "exit"
+  - Enter:
+  - END_REC:
