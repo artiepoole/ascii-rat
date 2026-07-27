@@ -2,6 +2,7 @@
 name = "ascii-rat-stage"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Shared library for the ascii-rat tools: asciicast, scripted actions, PTY, filters, and utilities"
 
 [lib]
