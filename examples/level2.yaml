@@ -9,24 +9,24 @@ pre_nl_delay_ms: 200
 post_nl_delay_ms: 500
 with_comments: true
 actions:
-- Comment: "edited by hand in nano"
-- InlineComment: "# edited by hand in nano"
-- '# this is demo level 2'
-- Keys:
-  - Ctrl-u
-- Wait: 0.5
-- clear
-- Wait: 0.75
-- Keys:
-  - Enter
-- Wait: 1.0
-- echo recorded by ascii-rat
-- Wait: 0.75
-- Keys:
-  - Enter
-- Wait: 0.5
-- exit
-- Wait: 0.75
-- Keys:
-  - Enter
-- END_REC: null
+  - Comment: "edited by hand in nano"
+  - InlineComment: "# edited by hand in nano"
+  - '# this is demo level 2'
+  - Keys:
+      - Ctrl-u
+  - Wait: 0.5
+  - clear
+  - Wait: 0.75
+  - Keys:
+      - Enter
+  - Wait: 1.0
+  - echo recorded by ascii-rat
+  - Wait: 0.75
+  - Keys:
+      - Enter
+  - Wait: 0.5
+  - exit
+  - Wait: 0.75
+  - Keys:
+      - Enter
+  - END_REC: null

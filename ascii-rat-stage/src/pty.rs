@@ -407,11 +407,9 @@ fn build_query_reply(bytes: &[u8]) -> Vec<u8> {
                         }
                     }
                     // Primary Device Attributes (ESC[c or ESC[0c).
-                    b'c' => {
-                        if params.is_empty() || params == b"0" {
-                            // VT100 with Advanced Video Option.
-                            out.extend_from_slice(&[ESC, b'[', b'?', b'1', b';', b'2', b'c']);
-                        }
+                    b'c' if (params.is_empty() || params == b"0") => {
+                        // VT100 with Advanced Video Option.
+                        out.extend_from_slice(&[ESC, b'[', b'?', b'1', b';', b'2', b'c']);
                     }
                     _ => {}
                 }
@@ -462,8 +460,8 @@ fn build_query_reply(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_query_reply, valid_utf8_prefix_len, wait_for_output_matching_each_on,
-        wait_for_output_matching_on, OutputChunk,
+        OutputChunk, build_query_reply, valid_utf8_prefix_len, wait_for_output_matching_each_on,
+        wait_for_output_matching_on,
     };
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -497,13 +495,11 @@ mod tests {
         tx.send(chunk(b"line two\r\n")).unwrap();
         tx.send(chunk(b"done __DONE__\r\n")).unwrap();
         let mut mirrored: Vec<Vec<u8>> = Vec::new();
-        let consumed = wait_for_output_matching_each_on(
-            &rx,
-            &["__DONE__"],
-            Duration::from_secs(1),
-            |c| mirrored.push(c.bytes.clone()),
-        )
-        .expect("needle should be found");
+        let consumed =
+            wait_for_output_matching_each_on(&rx, &["__DONE__"], Duration::from_secs(1), |c| {
+                mirrored.push(c.bytes.clone())
+            })
+            .expect("needle should be found");
         // The callback fired for every consumed chunk, in order, as they
         // arrived — including the ones before the match (the whole point: the
         // live view is fed during the wait, not only after it).
@@ -529,8 +525,9 @@ mod tests {
         tx.send(chunk(b"some unrelated output\r\n")).unwrap();
         // Keep the sender alive so the channel does not disconnect; the wait
         // must time out rather than match or return early.
-        let err = wait_for_output_matching_on(&rx, &["assword", "[sudo]"], Duration::from_millis(50))
-            .expect_err("should time out");
+        let err =
+            wait_for_output_matching_on(&rx, &["assword", "[sudo]"], Duration::from_millis(50))
+                .expect_err("should time out");
         assert!(err.to_string().contains("timed out"));
         drop(tx);
     }

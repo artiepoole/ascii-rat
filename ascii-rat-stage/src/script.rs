@@ -487,7 +487,13 @@ impl Key {
         }
 
         // Shift-Tab has its own dedicated sequence.
-        if self.name == KeyName::Tab && self.mods == (Mods { shift: true, ..Mods::NONE }) {
+        if self.name == KeyName::Tab
+            && self.mods
+                == (Mods {
+                    shift: true,
+                    ..Mods::NONE
+                })
+        {
             return b"\x1b[Z".to_vec();
         }
 
@@ -511,15 +517,15 @@ impl Key {
 
         // Ctrl + a single character or a printable named key → C0 control byte.
         // Combined with Alt, the sequence is prefixed with ESC.
-        if self.mods.ctrl {
-            if let Some(ctrl_byte) = self.ctrl_byte() {
-                let mut out = Vec::new();
-                if self.mods.alt {
-                    out.push(0x1b);
-                }
-                out.push(ctrl_byte);
-                return out;
+        if self.mods.ctrl
+            && let Some(ctrl_byte) = self.ctrl_byte()
+        {
+            let mut out = Vec::new();
+            if self.mods.alt {
+                out.push(0x1b);
             }
+            out.push(ctrl_byte);
+            return out;
         }
 
         // Alt + <key> (no usable Ctrl encoding): ESC followed by the key bytes.
@@ -742,9 +748,7 @@ impl<'de> Deserialize<'de> for Action {
                     "InlineComment" => {
                         let raw: InlineCommentField = map.next_value()?;
                         let (text, show) = match raw {
-                            InlineCommentField::Text(text) => {
-                                (text, DEFAULT_INLINE_COMMENT_SHOW)
-                            }
+                            InlineCommentField::Text(text) => (text, DEFAULT_INLINE_COMMENT_SHOW),
                             InlineCommentField::Full { text, show } => (text, show),
                         };
                         if text.is_empty() {
@@ -819,9 +823,7 @@ impl<'de> Deserialize<'de> for Action {
                         })?;
                         let count: u32 = map.next_value::<Option<u32>>()?.unwrap_or(1);
                         if count == 0 {
-                            return Err(de::Error::custom(format!(
-                                "`{other}` count must be >= 1"
-                            )));
+                            return Err(de::Error::custom(format!("`{other}` count must be >= 1")));
                         }
                         Action::Key {
                             keys: vec![key; count as usize],
@@ -1128,9 +1130,7 @@ fn resolve_delay(
         )),
         (Some(s), None) => Ok(s.to_seconds(1.0)),
         (None, Some(m)) => Ok(m.to_seconds(0.001)),
-        (None, None) => {
-            default.ok_or_else(|| format!("missing field `{field}` (or `{field}_ms`)"))
-        }
+        (None, None) => default.ok_or_else(|| format!("missing field `{field}` (or `{field}_ms`)")),
     }
 }
 
@@ -1228,17 +1228,34 @@ impl<'de> Deserialize<'de> for Script {
         // through the same scalar-or-range parsing; a fixed number yields
         // `(x, x)`. All delays fall back to the values `ascii-rat-scribe`
         // writes, so a minimal hand-written script only needs `output_file`.
-        let start_delay =
-            resolve_delay(raw.start_delay, raw.start_delay_ms, "start_delay", Some((0.5, 0.5)))
-                .map_err(de::Error::custom)?;
-        let end_delay = resolve_delay(raw.end_delay, raw.end_delay_ms, "end_delay", Some((0.5, 0.5)))
-            .map_err(de::Error::custom)?;
-        let typing_delay =
-            resolve_delay(raw.typing_delay, raw.typing_delay_ms, "typing_delay", Some((0.075, 0.075)))
-                .map_err(de::Error::custom)?;
-        let pre_nl_delay =
-            resolve_delay(raw.pre_nl_delay, raw.pre_nl_delay_ms, "pre_nl_delay", Some((0.2, 0.2)))
-                .map_err(de::Error::custom)?;
+        let start_delay = resolve_delay(
+            raw.start_delay,
+            raw.start_delay_ms,
+            "start_delay",
+            Some((0.5, 0.5)),
+        )
+        .map_err(de::Error::custom)?;
+        let end_delay = resolve_delay(
+            raw.end_delay,
+            raw.end_delay_ms,
+            "end_delay",
+            Some((0.5, 0.5)),
+        )
+        .map_err(de::Error::custom)?;
+        let typing_delay = resolve_delay(
+            raw.typing_delay,
+            raw.typing_delay_ms,
+            "typing_delay",
+            Some((0.075, 0.075)),
+        )
+        .map_err(de::Error::custom)?;
+        let pre_nl_delay = resolve_delay(
+            raw.pre_nl_delay,
+            raw.pre_nl_delay_ms,
+            "pre_nl_delay",
+            Some((0.2, 0.2)),
+        )
+        .map_err(de::Error::custom)?;
         let post_nl_delay = resolve_delay(
             raw.post_nl_delay,
             raw.post_nl_delay_ms,
@@ -1328,12 +1345,7 @@ impl Script {
     /// visible live while recording. The produced cast is unaffected. The
     /// per-action progress line (see [`print_progress`]) is suppressed while
     /// watching so it cannot corrupt the mirrored display.
-    pub fn run(
-        &self,
-        quiet: bool,
-        watch: bool,
-        sudo_password: Option<&str>,
-    ) -> Result<AsciiCast> {
+    pub fn run(&self, quiet: bool, watch: bool, sudo_password: Option<&str>) -> Result<AsciiCast> {
         let cols = self.cols.unwrap_or(DEFAULT_COLS);
         let rows = self.rows.unwrap_or(DEFAULT_ROWS);
 
@@ -1632,8 +1644,7 @@ impl Script {
             }
             // If it never appears we simply do not type (no false send); a
             // crashed child returns early too.
-            let waited =
-                session.wait_for_output_matching(&needles, SUDO_PROMPT_TIMEOUT)?;
+            let waited = session.wait_for_output_matching(&needles, SUDO_PROMPT_TIMEOUT)?;
             let matched = chunks_contain_any(&waited, &needles);
             // Keep the waited output in the cast (no redaction).
             mirror_and_capture(output_chunks, waited, watch);
@@ -1645,7 +1656,14 @@ impl Script {
         let password = sudo_password.filter(|p| !p.is_empty()).context(
             "a sudo: block requires a password, but none was supplied (or it was empty)",
         )?;
-        type_password(session, password, rng, self.typing_delay, output_chunks, watch)?;
+        type_password(
+            session,
+            password,
+            rng,
+            self.typing_delay,
+            output_chunks,
+            watch,
+        )?;
         *sudo_typed = true;
         Ok(())
     }
@@ -2050,16 +2068,16 @@ pub fn decode_escapes(input: &str) -> Result<Vec<u8>> {
             Some('0') => out.push(0),
             Some('\\') => out.push(b'\\'),
             Some('u') => {
-                let code = read_hex(&mut chars, 4)
-                    .context("invalid \\u escape: expected 4 hex digits")?;
+                let code =
+                    read_hex(&mut chars, 4).context("invalid \\u escape: expected 4 hex digits")?;
                 let ch = char::from_u32(code)
                     .with_context(|| format!("invalid unicode code point U+{code:04X}"))?;
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
             }
             Some('x') => {
-                let code = read_hex(&mut chars, 2)
-                    .context("invalid \\x escape: expected 2 hex digits")?;
+                let code =
+                    read_hex(&mut chars, 2).context("invalid \\x escape: expected 2 hex digits")?;
                 out.push(code as u8);
             }
             Some(other) => {
@@ -2164,10 +2182,12 @@ mod tests {
             vec!["assword".to_string(), "[sudo]".to_string()]
         );
         // The `q` quit command is present (types `q` to exit the TUI).
-        assert!(script
-            .actions
-            .iter()
-            .any(|a| matches!(a, Action::Text(t) if t == "q")));
+        assert!(
+            script
+                .actions
+                .iter()
+                .any(|a| matches!(a, Action::Text(t) if t == "q"))
+        );
         // Recording is stopped by an `END_REC:` action (no marker/filter now).
         assert_eq!(script.actions.last().unwrap(), &Action::End);
         assert!(script.actions.iter().any(|a| matches!(a, Action::End)));
@@ -2285,11 +2305,26 @@ mod tests {
         assert_eq!(Key::parse("Shift-Tab").unwrap().bytes(), b"\x1b[Z".to_vec());
 
         // Modified cursor/nav keys → xterm CSI-with-parameter.
-        assert_eq!(Key::parse("Ctrl-Right").unwrap().bytes(), b"\x1b[1;5C".to_vec());
-        assert_eq!(Key::parse("Shift-Up").unwrap().bytes(), b"\x1b[1;2A".to_vec());
-        assert_eq!(Key::parse("Ctrl-Shift-Left").unwrap().bytes(), b"\x1b[1;6D".to_vec());
-        assert_eq!(Key::parse("Ctrl-End").unwrap().bytes(), b"\x1b[1;5F".to_vec());
-        assert_eq!(Key::parse("Ctrl-PageDown").unwrap().bytes(), b"\x1b[6;5~".to_vec());
+        assert_eq!(
+            Key::parse("Ctrl-Right").unwrap().bytes(),
+            b"\x1b[1;5C".to_vec()
+        );
+        assert_eq!(
+            Key::parse("Shift-Up").unwrap().bytes(),
+            b"\x1b[1;2A".to_vec()
+        );
+        assert_eq!(
+            Key::parse("Ctrl-Shift-Left").unwrap().bytes(),
+            b"\x1b[1;6D".to_vec()
+        );
+        assert_eq!(
+            Key::parse("Ctrl-End").unwrap().bytes(),
+            b"\x1b[1;5F".to_vec()
+        );
+        assert_eq!(
+            Key::parse("Ctrl-PageDown").unwrap().bytes(),
+            b"\x1b[6;5~".to_vec()
+        );
 
         // A plain key still emits exactly the base bytes.
         assert_eq!(Key::plain(KeyName::Down).bytes(), b"\x1bOB".to_vec());
@@ -2331,7 +2366,10 @@ mod tests {
         // Bytes owned by named keys are NOT hijacked as Ctrl combos.
         assert_eq!(Key::from_bytes(b"\t"), Some(Key::plain(KeyName::Tab)));
         assert_eq!(Key::from_bytes(b"\x1b"), Some(Key::plain(KeyName::Esc)));
-        assert_eq!(Key::from_bytes(b"\x7f"), Some(Key::plain(KeyName::Backspace)));
+        assert_eq!(
+            Key::from_bytes(b"\x7f"),
+            Some(Key::plain(KeyName::Backspace))
+        );
     }
 
     #[test]
@@ -2403,7 +2441,11 @@ mod tests {
                 show: 1.5,
             },
             Action::Key {
-                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
+                keys: vec![
+                    KeyName::Down.into(),
+                    KeyName::Down.into(),
+                    KeyName::Enter.into(),
+                ],
             },
             Action::Key {
                 keys: vec![KeyName::Esc.into()],
@@ -2445,8 +2487,14 @@ mod tests {
     fn action_end_serializes_as_end_rec_mapping() {
         // `End` must serialize to the `END_REC:` mapping the loader recognizes.
         let yaml = serde_yaml::to_string(&Action::End).unwrap();
-        assert!(yaml.contains("END_REC"), "unexpected END serialization: {yaml}");
-        assert_eq!(deserialize_single_action(&format!("- {}", yaml.trim())), Action::End);
+        assert!(
+            yaml.contains("END_REC"),
+            "unexpected END serialization: {yaml}"
+        );
+        assert_eq!(
+            deserialize_single_action(&format!("- {}", yaml.trim())),
+            Action::End
+        );
     }
 
     #[test]
@@ -2457,7 +2505,11 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Down.into()],
+                keys: vec![
+                    KeyName::Down.into(),
+                    KeyName::Down.into(),
+                    KeyName::Down.into()
+                ],
             }
         );
         assert_eq!(
@@ -2497,7 +2549,11 @@ mod tests {
         assert_eq!(
             script.actions[0],
             Action::Key {
-                keys: vec![KeyName::Down.into(), KeyName::Down.into(), KeyName::Enter.into()],
+                keys: vec![
+                    KeyName::Down.into(),
+                    KeyName::Down.into(),
+                    KeyName::Enter.into()
+                ],
             }
         );
     }
@@ -2524,10 +2580,7 @@ mod tests {
             .progress_label(),
             "key Down Enter"
         );
-        assert_eq!(
-            Action::Wait { seconds: 2.0 }.progress_label(),
-            "wait 2s"
-        );
+        assert_eq!(Action::Wait { seconds: 2.0 }.progress_label(), "wait 2s");
         assert_eq!(Action::End.progress_label(), "end recording");
     }
 
@@ -2535,24 +2588,23 @@ mod tests {
     fn parse_action_mapping_with_two_keys_fails() {
         // An action mapping must have exactly one tag key; two is an error.
         let yaml = script_yaml_with_actions("- {Down: 1, Enter: 1}");
-        let err = serde_yaml::from_str::<Script>(&yaml)
-            .expect_err("two tags in one mapping should fail");
+        let err =
+            serde_yaml::from_str::<Script>(&yaml).expect_err("two tags in one mapping should fail");
         assert!(err.to_string().contains("exactly one"), "error was: {err}");
     }
 
     #[test]
     fn parse_empty_keys_list_fails() {
         let yaml = script_yaml_with_actions("- Keys: []");
-        let err = serde_yaml::from_str::<Script>(&yaml)
-            .expect_err("empty keys list should fail");
+        let err = serde_yaml::from_str::<Script>(&yaml).expect_err("empty keys list should fail");
         assert!(err.to_string().contains("at least one"), "error was: {err}");
     }
 
     #[test]
     fn parse_zero_count_key_fails() {
         let yaml = script_yaml_with_actions("- Down: 0");
-        let err = serde_yaml::from_str::<Script>(&yaml)
-            .expect_err("a zero repeat count should fail");
+        let err =
+            serde_yaml::from_str::<Script>(&yaml).expect_err("a zero repeat count should fail");
         assert!(err.to_string().contains(">= 1"), "error was: {err}");
     }
 
@@ -2658,8 +2710,14 @@ actions:
             timeout: DEFAULT_EXPECT_TIMEOUT,
         })
         .unwrap();
-        assert!(yaml.contains("Expect"), "unexpected Expect serialization: {yaml}");
-        assert!(!yaml.contains("timeout"), "default timeout should be omitted: {yaml}");
+        assert!(
+            yaml.contains("Expect"),
+            "unexpected Expect serialization: {yaml}"
+        );
+        assert!(
+            !yaml.contains("timeout"),
+            "default timeout should be omitted: {yaml}"
+        );
     }
 
     #[test]
@@ -2681,8 +2739,7 @@ actions:
     #[test]
     fn parse_inline_comment_mapping_overrides_show() {
         // The `{text, show}` mapping form overrides the default show duration.
-        let yaml =
-            script_yaml_with_actions("- InlineComment: {text: \"# note\", show: 1.5}");
+        let yaml = script_yaml_with_actions("- InlineComment: {text: \"# note\", show: 1.5}");
         let script: Script =
             serde_yaml::from_str(&yaml).expect("should parse InlineComment mapping");
         assert_eq!(
@@ -2716,14 +2773,16 @@ actions:
             yaml.contains("InlineComment"),
             "unexpected InlineComment serialization: {yaml}"
         );
-        assert!(!yaml.contains("show"), "default show should be omitted: {yaml}");
+        assert!(
+            !yaml.contains("show"),
+            "default show should be omitted: {yaml}"
+        );
     }
 
     #[test]
     fn parse_wait_negative_seconds_fails() {
         let yaml = script_yaml_with_actions("- Wait: -1.0");
-        let err = serde_yaml::from_str::<Script>(&yaml)
-            .expect_err("negative seconds should fail");
+        let err = serde_yaml::from_str::<Script>(&yaml).expect_err("negative seconds should fail");
         assert!(err.to_string().contains(">= 0"), "error was: {err}");
     }
 
@@ -2883,8 +2942,7 @@ actions:
     #[test]
     fn sudo_explicit_prompts_override_defaults() {
         let yaml = script_yaml_with_sudo("sudo:\n  prompts:\n  - \"> \"\n  - \"assword\"");
-        let script: Script =
-            serde_yaml::from_str(&yaml).expect("should parse sudo with prompts");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse sudo with prompts");
         assert!(script.sudo_enabled());
         assert_eq!(
             script.sudo.as_ref().unwrap().prompts,
@@ -2933,7 +2991,9 @@ actions:
         // A line from demo.yaml.
         assert_eq!(
             decode_escapes("\\r\\u001bOB\\r\\u001bOB\\u001bOB").unwrap(),
-            vec![b'\r', 0x1b, b'O', b'B', b'\r', 0x1b, b'O', b'B', 0x1b, b'O', b'B']
+            vec![
+                b'\r', 0x1b, b'O', b'B', b'\r', 0x1b, b'O', b'B', 0x1b, b'O', b'B'
+            ]
         );
         // The delete-key sequence from demo.yaml: "/" then ESC [ 3 ~.
         assert_eq!(
@@ -3086,7 +3146,10 @@ actions:
     fn strip_keeps_incomplete_trailing_sequence_verbatim() {
         // A query split at the end of a chunk (no final/terminator byte yet) is
         // preserved so the remainder can be handled when it arrives.
-        assert_eq!(strip_terminal_queries(b"text\x1b[6"), b"text\x1b[6".to_vec());
+        assert_eq!(
+            strip_terminal_queries(b"text\x1b[6"),
+            b"text\x1b[6".to_vec()
+        );
         assert_eq!(
             strip_terminal_queries(b"text\x1b]11;?"),
             b"text\x1b]11;?".to_vec()
@@ -3128,7 +3191,9 @@ actions:
             rows: Some(24),
             sudo: None,
         };
-        let cast = script.run(true, false, None).expect("recording should succeed");
+        let cast = script
+            .run(true, false, None)
+            .expect("recording should succeed");
         assert_eq!(cast.header.width, 80);
         // The echoed text should appear somewhere in the output.
         let joined: String = cast
@@ -3170,7 +3235,9 @@ actions:
             rows: Some(24),
             sudo: None,
         };
-        let cast = script.run(true, false, None).expect("recording should succeed");
+        let cast = script
+            .run(true, false, None)
+            .expect("recording should succeed");
         let last_time = cast
             .events
             .iter()
@@ -3232,7 +3299,9 @@ actions:
             rows: Some(24),
             sudo: None,
         };
-        let cast = script.run(true, false, None).expect("recording should succeed");
+        let cast = script
+            .run(true, false, None)
+            .expect("recording should succeed");
         let joined: String = cast
             .events
             .iter()
@@ -3293,7 +3362,9 @@ actions:
             rows: Some(24),
             sudo: None,
         };
-        let cast = script.run(true, false, None).expect("recording should succeed");
+        let cast = script
+            .run(true, false, None)
+            .expect("recording should succeed");
         let joined: String = cast
             .events
             .iter()
@@ -3338,10 +3409,7 @@ actions:
             key_delay: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
-            actions: vec![
-                Action::Text(stub),
-                Action::Text("exit".to_string()),
-            ],
+            actions: vec![Action::Text(stub), Action::Text("exit".to_string())],
             filters: vec![],
             cols: Some(80),
             rows: Some(24),
@@ -3376,8 +3444,7 @@ actions:
     #[test]
     #[ignore]
     fn sudo_password_missing_is_an_error() {
-        let stub = "printf '%s%s' '[sud' 'o] pass'; printf 'word: '; read -r pw"
-            .to_string();
+        let stub = "printf '%s%s' '[sud' 'o] pass'; printf 'word: '; read -r pw".to_string();
         let script = Script {
             output_file: "sudo-missing.cast".to_string(),
             start_delay: (0.05, 0.05),

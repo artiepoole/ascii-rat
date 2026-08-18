@@ -4,7 +4,7 @@
 //! sequence of newline-separated JSON values: a single JSON object header,
 //! followed by one JSON array `[time, code, data]` per event.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -64,12 +64,29 @@ impl Header {
 /// serialization.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    Output { time: f64, data: String },
-    Input { time: f64, data: String },
-    Marker { time: f64, label: String },
-    Resize { time: f64, columns: u16, rows: u16 },
+    Output {
+        time: f64,
+        data: String,
+    },
+    Input {
+        time: f64,
+        data: String,
+    },
+    Marker {
+        time: f64,
+        label: String,
+    },
+    Resize {
+        time: f64,
+        columns: u16,
+        rows: u16,
+    },
     /// Internal-only event; must be filtered before saving.
-    Comment { time: f64, top: bool, comment: String },
+    Comment {
+        time: f64,
+        top: bool,
+        comment: String,
+    },
 }
 
 impl Event {
@@ -235,8 +252,8 @@ impl AsciiCast {
             if line.trim().is_empty() {
                 continue;
             }
-            let value: serde_json::Value = serde_json::from_str(line)
-                .with_context(|| format!("invalid JSON line: {line}"))?;
+            let value: serde_json::Value =
+                serde_json::from_str(line).with_context(|| format!("invalid JSON line: {line}"))?;
             values.push(value);
         }
         parse_cast(values)
@@ -246,12 +263,13 @@ impl AsciiCast {
 /// Parse a sequence of decoded JSON values into an `AsciiCast`.
 fn parse_cast(values: Vec<serde_json::Value>) -> Result<AsciiCast> {
     let mut iter = values.into_iter();
-    let header_value = iter.next().ok_or_else(|| anyhow!("Missing asciicast header"))?;
+    let header_value = iter
+        .next()
+        .ok_or_else(|| anyhow!("Missing asciicast header"))?;
     if !header_value.is_object() {
         bail!("Missing asciicast header");
     }
-    let header: Header =
-        serde_json::from_value(header_value).context("Invalid header data")?;
+    let header: Header = serde_json::from_value(header_value).context("Invalid header data")?;
     if header.version != 2 {
         bail!("Unsupported file format version {}", header.version);
     }
@@ -354,7 +372,10 @@ mod tests {
             time: 1.5,
             label: "END".to_string(),
         };
-        assert_eq!(marker.as_data().unwrap(), serde_json::json!([1.5, "m", "END"]));
+        assert_eq!(
+            marker.as_data().unwrap(),
+            serde_json::json!([1.5, "m", "END"])
+        );
 
         let resize = Event::Resize {
             time: 0.0,
@@ -377,7 +398,7 @@ mod tests {
 
     #[test]
     fn parse_and_reload_roundtrip() {
-        let lines = vec![
+        let lines = [
             r#"{"version": 2, "width": 100, "height": 40}"#.to_string(),
             r#"[0.1, "o", "hello"]"#.to_string(),
             r#"[0.2, "m", "END"]"#.to_string(),

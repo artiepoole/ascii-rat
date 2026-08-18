@@ -7,7 +7,6 @@
 #
 # Play it with:
 #   ascii-rat-bard --watch examples/sudo-command.yaml
-
 output_file: "sudo-command.cast"
 cols: 100
 rows: 30
@@ -19,7 +18,6 @@ post_nl_delay_ms: 500
 # Comment: actions require comments to be enabled so they are rendered.
 with_comments: true
 sudo: true
-
 actions:
   - Comment: "run a privileged command with sudo"
   - "sudo whoami"

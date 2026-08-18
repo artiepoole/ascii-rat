@@ -12,5 +12,6 @@ path = "src/main.rs"
 [dependencies]
 ascii-rat-stage = { path = "../ascii-rat-stage" }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 anyhow = { workspace = true }
 rpassword = { workspace = true }

@@ -3,11 +3,12 @@
 //! Reads a YAML script of demo inputs, drives a child process inside a PTY,
 //! and records the session as an asciicast v2 `.cast` file.
 
-use anyhow::{bail, Context, Result};
-use clap::Parser;
+use anyhow::{Context, Result, bail};
 use ascii_rat_stage::cast::AsciiCast;
 use ascii_rat_stage::script::Script;
 use ascii_rat_stage::util;
+use clap::{CommandFactory, Parser};
+use clap_complete::{Shell, generate};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -20,7 +21,12 @@ use std::process::ExitCode;
 )]
 struct Cli {
     /// The scripted session to record.
-    script_file: PathBuf,
+    #[arg(required_unless_present = "completions")]
+    script_file: Option<PathBuf>,
+
+    /// Print a shell completion script for the given shell and exit.
+    #[arg(long = "completions", value_name = "SHELL")]
+    completions: Option<Shell>,
 
     /// Don't run the script (skip recording).
     #[arg(short = 'd', long = "dont-run")]
@@ -54,10 +60,19 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if let Some(shell) = cli.completions {
+        let mut cmd = Cli::command();
+        let name = cmd.get_name().to_string();
+        generate(shell, &mut cmd, name, &mut std::io::stdout());
+        return Ok(());
+    }
+
     let script_file = cli
         .script_file
+        .expect("script_file is required unless --completions is given");
+    let script_file = script_file
         .canonicalize()
-        .with_context(|| format!("invalid script file: {:?}", cli.script_file))?;
+        .with_context(|| format!("invalid script file: {script_file:?}"))?;
 
     let script = Script::from_yaml(&script_file)?;
 
@@ -127,5 +142,23 @@ mod tests {
         let script = Path::new("/tmp/demos/demo.yaml");
         let resolved = resolve_output_file(script, "/var/tmp/out.cast");
         assert_eq!(resolved, PathBuf::from("/var/tmp/out.cast"));
+    }
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn completions_generate_for_bash_zsh_fish() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let mut buf = Vec::new();
+            generate(shell, &mut Cli::command(), "ascii-rat-bard", &mut buf);
+            let text = String::from_utf8(buf).expect("completions are UTF-8");
+            assert!(
+                text.contains("ascii-rat-bard"),
+                "{shell} completions should mention the binary name"
+            );
+        }
     }
 }
