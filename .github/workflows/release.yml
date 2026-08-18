@@ -75,8 +75,8 @@ jobs:
             echo "version=${VERSION}"
             echo "commit_sha=${COMMIT_SHA}"
           } >> "${GITHUB_OUTPUT}"
-  build:
-    name: Build release artifacts
+  build-linux:
+    name: Build Linux release artifacts
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -90,7 +90,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.metadata.outputs.commit_sha }}
-      - name: Build all release binaries
+      - name: Build release binaries
         shell: bash
         run: |
           set -euo pipefail
@@ -100,23 +100,50 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p dist
-          cp target/release/ascii-rat-bard dist/
-          cp target/release/ascii-rat-scribe dist/
+          mkdir -p dist artifacts
+          cp target/release/ascii-rat-bard target/release/ascii-rat-scribe dist/
           chmod +x dist/ascii-rat-bard dist/ascii-rat-scribe
 
           ARCHIVE_NAME="ascii-rat-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz"
-          CHECKSUM_NAME="${ARCHIVE_NAME}.sha256"
+          tar -czf "artifacts/${ARCHIVE_NAME}" -C dist ascii-rat-bard ascii-rat-scribe
 
-          tar -czf "${ARCHIVE_NAME}" -C dist ascii-rat-bard ascii-rat-scribe
-          sha256sum "${ARCHIVE_NAME}" > "${CHECKSUM_NAME}"
+          cd artifacts
+          sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
       - name: Upload release assets
         uses: actions/upload-artifact@v7
         with:
-          name: release-assets-${{ matrix.arch }}
-          path: |
-            ascii-rat-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
-            ascii-rat-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz.sha256
+          name: release-assets-linux-${{ matrix.arch }}
+          path: artifacts/
+  build-windows:
+    name: Build Windows release artifacts
+    runs-on: windows-latest
+    needs: metadata
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.commit_sha }}
+      - name: Build release binaries
+        shell: pwsh
+        run: cargo build --workspace --release --locked --all-features
+      - name: Package artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force -Path dist, artifacts | Out-Null
+          Copy-Item target/release/ascii-rat-bard.exe, target/release/ascii-rat-scribe.exe dist/
+
+          $archive = "ascii-rat-${{ needs.metadata.outputs.version }}-windows-amd64.zip"
+          Compress-Archive -Path dist/* -DestinationPath "artifacts/$archive"
+
+          # Match the `sha256sum` output format used by the Linux job.
+          $hash = (Get-FileHash -Algorithm SHA256 "artifacts/$archive").Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "artifacts/$archive.sha256"
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-windows-amd64
+          path: artifacts/
   cargo-publish:
     name: Publish crates to crates.io
     needs: metadata
@@ -135,7 +162,8 @@ jobs:
     environment: gh-release
     needs:
       - metadata
-      - build
+      - build-linux
+      - build-windows
       - cargo-publish
     if: ${{ always() && (inputs.skip_cargo == true || needs.cargo-publish.result == 'success') }}
     steps:
@@ -156,8 +184,8 @@ jobs:
           set -euo pipefail
 
           mapfile -t ASSETS < <(find ./release-assets -type f | sort)
-          if [[ ${#ASSETS[@]} -lt 4 ]]; then
-            echo "::error::Expected at least 4 release assets (2 archives + 2 checksums), got ${#ASSETS[@]}."
+          if [[ ${#ASSETS[@]} -lt 6 ]]; then
+            echo "::error::Expected at least 6 release assets (3 archives + 3 checksums), got ${#ASSETS[@]}."
             exit 1
           fi
 
