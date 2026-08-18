@@ -1,5 +1,11 @@
 # ascii-rat
 
+[![ubuntu 26.04 LTS](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.launchpad.net%2F1.0%2F~artiepoole%2F%2Barchive%2Fubuntu%2Frat-troupe%3Fws.op%3DgetPublishedSources%26distro_series%3Dhttps%253A%252F%252Fapi.launchpad.net%252F1.0%252Fubuntu%252Fresolute&query=%24.entries%5B0%5D.source_package_version&label=ubuntu%2026.04%20LTS&logo=ubuntu&color=E95420)](https://launchpad.net/~artiepoole/+archive/ubuntu/rat-troupe)
+[![ubuntu 26.10](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.launchpad.net%2F1.0%2F~artiepoole%2F%2Barchive%2Fubuntu%2Frat-troupe%3Fws.op%3DgetPublishedSources%26distro_series%3Dhttps%253A%252F%252Fapi.launchpad.net%252F1.0%252Fubuntu%252Fstonking&query=%24.entries%5B0%5D.source_package_version&label=ubuntu%2026.10&logo=ubuntu&color=E95420)](https://launchpad.net/~artiepoole/+archive/ubuntu/rat-troupe)
+[![ascii-rat-bard on crates.io](https://img.shields.io/crates/v/ascii-rat-bard?label=ascii-rat-bard&logo=rust)](https://crates.io/crates/ascii-rat-bard)
+[![ascii-rat-scribe on crates.io](https://img.shields.io/crates/v/ascii-rat-scribe?label=ascii-rat-scribe&logo=rust)](https://crates.io/crates/ascii-rat-scribe)
+[![ascii-rat-stage on crates.io](https://img.shields.io/crates/v/ascii-rat-stage?label=ascii-rat-stage&logo=rust)](https://crates.io/crates/ascii-rat-stage)
+
 A small toolkit for scripted, reproducible terminal recordings in the
 [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) (`.cast`)
 format used by https://asciinema.org/.
@@ -71,6 +77,29 @@ you (live) ──▶ ascii-rat-scribe ──▶ demo.yaml ──(edit by hand)�
 
 Writing `demo.yaml` from scratch also works — scribe just gives a realistic
 starting point.
+
+## Installing
+
+Ubuntu 26.04 LTS and 26.10 — from the [`rat-troupe` PPA](https://launchpad.net/~artiepoole/+archive/ubuntu/rat-troupe):
+
+```bash
+sudo add-apt-repository ppa:artiepoole/rat-troupe
+sudo apt update
+sudo apt install ascii-rat
+```
+
+Ubuntu 24.04 and other Linux distros — install the released crates with
+[cargo](https://rustup.rs/) (binaries land in `~/.cargo/bin`):
+
+```bash
+cargo install ascii-rat-bard ascii-rat-scribe
+```
+
+Or build straight from git, which tracks `main` instead of the last release:
+
+```bash
+cargo install --git https://github.com/artiepoole/ascii-rat ascii-rat-bard ascii-rat-scribe
+```
 
 ## Building
 
