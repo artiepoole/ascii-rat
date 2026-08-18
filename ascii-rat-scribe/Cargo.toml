@@ -10,7 +10,7 @@ name = "ascii-rat-scribe"
 path = "src/main.rs"
 
 [dependencies]
-ascii-rat-stage = { path = "../ascii-rat-stage" }
+ascii-rat-stage = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 serde = { workspace = true }
