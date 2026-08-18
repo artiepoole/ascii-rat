@@ -1,0 +1,171 @@
+name: Release tagged version
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (without leading v, for example 0.1.1)'
+        required: true
+      commit_sha:
+        description: 'Commit SHA to build and release'
+        required: true
+      skip_cargo:
+        description: 'Skip cargo publish steps (Only for failed GH releases)'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref_name || github.event.inputs.version }}
+  cancel-in-progress: false
+jobs:
+  metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      version: ${{ steps.meta.outputs.version }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Resolve and validate release inputs
+        id: meta
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+          COMMIT_SHA: ${{ inputs.commit_sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Normalize version when triggered by tag push (for example, v0.1.1 -> 0.1.1).
+          if [[ "${VERSION}" == v* ]]; then
+            VERSION="${VERSION#v}"
+          fi
+          TAG_NAME="v${VERSION}"
+
+          if ! git cat-file -e "${COMMIT_SHA}^{commit}"; then
+            echo "::error::Commit '${COMMIT_SHA}' does not exist in this repository."
+            exit 1
+          fi
+
+          COMMIT_SHA="$(git rev-parse "${COMMIT_SHA}^{commit}")"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null; then
+            TAG_COMMIT_SHA="$(git rev-parse "refs/tags/${TAG_NAME}^{commit}")"
+            if [[ "${TAG_COMMIT_SHA}" != "${COMMIT_SHA}" ]]; then
+              echo "::error::Tag '${TAG_NAME}' already exists and points to ${TAG_COMMIT_SHA}, not ${COMMIT_SHA}."
+              exit 1
+            fi
+          fi
+
+          # The tag version must match every version in the workspace.
+          python3 scripts/ci/check_version_bump.py validate --expected-version "${VERSION}" --ref "${COMMIT_SHA}"
+
+          if ! git merge-base --is-ancestor "${COMMIT_SHA}" "origin/${{ github.event.repository.default_branch }}"; then
+            echo "::error::Commit ${COMMIT_SHA} is not on ${{ github.event.repository.default_branch }}. Releases must target the default branch."
+            exit 1
+          fi
+
+          {
+            echo "tag_name=${TAG_NAME}"
+            echo "version=${VERSION}"
+            echo "commit_sha=${COMMIT_SHA}"
+          } >> "${GITHUB_OUTPUT}"
+  build:
+    name: Build release artifacts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    needs: metadata
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.commit_sha }}
+      - name: Build all release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --workspace --release --locked --all-features
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          cp target/release/ascii-rat-bard dist/
+          cp target/release/ascii-rat-scribe dist/
+          chmod +x dist/ascii-rat-bard dist/ascii-rat-scribe
+
+          ARCHIVE_NAME="ascii-rat-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz"
+          CHECKSUM_NAME="${ARCHIVE_NAME}.sha256"
+
+          tar -czf "${ARCHIVE_NAME}" -C dist ascii-rat-bard ascii-rat-scribe
+          sha256sum "${ARCHIVE_NAME}" > "${CHECKSUM_NAME}"
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-${{ matrix.arch }}
+          path: |
+            ascii-rat-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
+            ascii-rat-${{ needs.metadata.outputs.version }}-linux-${{ matrix.arch }}.tar.gz.sha256
+  cargo-publish:
+    name: Publish crates to crates.io
+    needs: metadata
+    if: ${{ inputs.skip_cargo != true }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/cargo-publish.yml
+    with:
+      version: ${{ needs.metadata.outputs.version }}
+      commit_sha: ${{ needs.metadata.outputs.commit_sha }}
+      mode: publish
+  github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    environment: gh-release
+    needs:
+      - metadata
+      - build
+      - cargo-publish
+    if: ${{ always() && (inputs.skip_cargo == true || needs.cargo-publish.result == 'success') }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.commit_sha }}
+          fetch-depth: 0
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          path: ./release-assets
+      - name: Create GitHub release with gh CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t ASSETS < <(find ./release-assets -type f | sort)
+          if [[ ${#ASSETS[@]} -lt 4 ]]; then
+            echo "::error::Expected at least 4 release assets (2 archives + 2 checksums), got ${#ASSETS[@]}."
+            exit 1
+          fi
+
+          RELEASE_ARGS=(
+            --target "${{ needs.metadata.outputs.commit_sha }}"
+            --generate-notes
+          )
+
+          gh release create "${{ needs.metadata.outputs.tag_name }}" \
+            "${ASSETS[@]}" \
+            "${RELEASE_ARGS[@]}"

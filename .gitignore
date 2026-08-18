@@ -31,3 +31,5 @@ opencode.json
 .workshop
 
 *.lock
+# Cargo.lock is committed so release builds can use --locked
+!Cargo.lock
