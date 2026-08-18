@@ -282,10 +282,10 @@ impl Decoder {
 
     /// Emit an owed `Wait` action (if any) before the next action.
     fn flush_wait(&mut self) {
-        if let Some(seconds) = self.pending_wait.take() {
-            if seconds > 0.0 {
-                self.actions.push(Action::Wait { seconds });
-            }
+        if let Some(seconds) = self.pending_wait.take()
+            && seconds > 0.0
+        {
+            self.actions.push(Action::Wait { seconds });
         }
     }
 

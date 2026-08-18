@@ -3,12 +3,12 @@
 //! Reads a YAML script of demo inputs, drives a child process inside a PTY,
 //! and records the session as an asciicast v2 `.cast` file.
 
-use anyhow::{bail, Context, Result};
-use clap::{CommandFactory, Parser};
-use clap_complete::{generate, Shell};
+use anyhow::{Context, Result, bail};
 use ascii_rat_stage::cast::AsciiCast;
 use ascii_rat_stage::script::Script;
 use ascii_rat_stage::util;
+use clap::{CommandFactory, Parser};
+use clap_complete::{Shell, generate};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 

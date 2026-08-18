@@ -80,10 +80,11 @@ fn pipeline_produces_valid_v2_cast() {
         "events after END should be trimmed"
     );
     // No raw Marker/Comment events should remain after filtering.
-    assert!(cast
-        .events
-        .iter()
-        .all(|e| !matches!(e, Event::Marker { .. } | Event::Comment { .. })));
+    assert!(
+        cast.events
+            .iter()
+            .all(|e| !matches!(e, Event::Marker { .. } | Event::Comment { .. }))
+    );
 
     // The comment must have become an output status-line escape sequence.
     let has_status_line = cast.events.iter().any(|e| match e {

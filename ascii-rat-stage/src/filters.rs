@@ -19,9 +19,16 @@ const REV_END: &str = "\u{1b}[m";
 /// A post-processing pass over the recorded events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Filter {
-    RegexReplacement { regex: String, replacement: String },
-    StartMarker { start_label: String },
-    EndMarker { end_label: String },
+    RegexReplacement {
+        regex: String,
+        replacement: String,
+    },
+    StartMarker {
+        start_label: String,
+    },
+    EndMarker {
+        end_label: String,
+    },
     Comment,
     /// Drop any `Comment` events entirely (used when comments are disabled).
     ///
@@ -59,10 +66,10 @@ impl Filter {
                 for event in events {
                     if started {
                         new_events.push(event);
-                    } else if let Event::Marker { label, .. } = &event {
-                        if label == start_label {
-                            started = true;
-                        }
+                    } else if let Event::Marker { label, .. } = &event
+                        && label == start_label
+                    {
+                        started = true;
                     }
                 }
                 Ok(new_events)
@@ -70,10 +77,10 @@ impl Filter {
             Filter::EndMarker { end_label } => {
                 let mut new_events = Vec::new();
                 for event in events {
-                    if let Event::Marker { label, .. } = &event {
-                        if label == end_label {
-                            break;
-                        }
+                    if let Event::Marker { label, .. } = &event
+                        && label == end_label
+                    {
+                        break;
                     }
                     new_events.push(event);
                 }
@@ -190,13 +197,12 @@ impl<'de> Deserialize<'de> for Filter {
                                     "start_label",
                                     "end_label",
                                 ],
-                            ))
+                            ));
                         }
                     }
                 }
 
-                let filter_id =
-                    filter_id.ok_or_else(|| de::Error::missing_field("filter_id"))?;
+                let filter_id = filter_id.ok_or_else(|| de::Error::missing_field("filter_id"))?;
                 match filter_id.as_str() {
                     "RegexReplacementFilter" => Ok(Filter::RegexReplacement {
                         regex: regex.ok_or_else(|| de::Error::missing_field("regex"))?,

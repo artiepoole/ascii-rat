@@ -12,7 +12,7 @@ mod emit;
 use anyhow::Result;
 use ascii_rat_stage::util;
 use clap::{CommandFactory, Parser};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use std::process::ExitCode;
 
 /// Record a live terminal session into a `demo.yaml` script.
@@ -109,7 +109,11 @@ fn run(cli: Cli) -> Result<()> {
     };
     emit::write_script(&script, &cli.output)?;
 
-    eprintln!("wrote {} action(s) to {}", script.actions.len(), cli.output.display());
+    eprintln!(
+        "wrote {} action(s) to {}",
+        script.actions.len(),
+        cli.output.display()
+    );
     Ok(())
 }
 
@@ -122,12 +126,21 @@ fn run(cli: Cli) -> Result<()> {
 fn resolve_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
     const DEFAULT_COLS: u16 = 80;
     const DEFAULT_ROWS: u16 = 24;
-    let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((DEFAULT_COLS, DEFAULT_ROWS));
+    let (term_cols, term_rows) =
+        crossterm::terminal::size().unwrap_or((DEFAULT_COLS, DEFAULT_ROWS));
     let resolved_cols = cols.filter(|&c| c > 0).unwrap_or(term_cols);
     let resolved_rows = rows.filter(|&r| r > 0).unwrap_or(term_rows);
     (
-        if resolved_cols == 0 { DEFAULT_COLS } else { resolved_cols },
-        if resolved_rows == 0 { DEFAULT_ROWS } else { resolved_rows },
+        if resolved_cols == 0 {
+            DEFAULT_COLS
+        } else {
+            resolved_cols
+        },
+        if resolved_rows == 0 {
+            DEFAULT_ROWS
+        } else {
+            resolved_rows
+        },
     )
 }
 

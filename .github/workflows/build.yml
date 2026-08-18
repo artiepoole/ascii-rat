@@ -1,17 +1,14 @@
 name: build
-
 on:
   push:
     branches: [main]
   pull_request:
-
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: cargo test --workspace
-
   e2e-demo-ception:
     runs-on: ubuntu-latest
     steps:
@@ -27,7 +24,6 @@ jobs:
           test -s level2.yaml
           test -s level2.cast
           grep -q "recorded by ascii-rat" level2.cast
-
   windows:
     runs-on: windows-latest
     steps:

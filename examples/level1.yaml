@@ -6,10 +6,8 @@ end_delay_ms: 800
 typing_delay_ms: 50
 pre_nl_delay_ms: 200
 post_nl_delay_ms: 500
-
 with_comments: true
 key_delay: [0.15, 0.25]
-
 actions:
   # Start from a clean screen so the top-level demo does not begin cluttered
   # with whatever was on the terminal before playback.
@@ -17,7 +15,6 @@ actions:
   - "clear"
   - Enter:
   - Wait: 0.5
-
   # ---------------------------------------------------------------------------
   # Act 1 — record a new script with ascii-rat-scribe.
   # ---------------------------------------------------------------------------
@@ -31,7 +28,6 @@ actions:
   - "clear"
   - Enter:
   - Wait: 0.8
-
   - Comment: "type a throwaway note, then delete it"
   - Comment: "type a command into the recorded shell"
   - "echo recorded by ascii-rat"
@@ -42,7 +38,6 @@ actions:
   - InlineComment: "# back to demo level 1"
   - Wait: 1.5
   - Comment: "the scribe wrote level2.yaml"
-
   # ---------------------------------------------------------------------------
   # Act 2 — edit the recorded script by hand in nano.
   # ---------------------------------------------------------------------------
@@ -88,7 +83,6 @@ actions:
   - Comment: "quit nano with Ctrl-X"
   - Ctrl-X:
   - Wait: 1.5
-
   # ---------------------------------------------------------------------------
   # Act 3 — replay the edited script with ascii-rat-bard.
   # ---------------------------------------------------------------------------
@@ -109,7 +103,6 @@ actions:
   - "clear"
   - Enter:
   - Wait: 0.8
-
   # ---------------------------------------------------------------------------
   # Act 4 — show how you *would* share the cast, without actually uploading.
   # ---------------------------------------------------------------------------

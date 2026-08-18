@@ -13,14 +13,14 @@ key_delay_ms: [150, 200]
 # character-by-character. The password is asked for once (hidden) at record time.
 sudo: true
 actions:
-# Typed strings type their characters only; press Enter explicitly to run them.
-- "sudo whoami"
-- Enter: 1
-# Give the launched command time to finish.
-- Wait: 2.0
-- "exit"
-- Enter: 1
-# End the recording exactly here (replaces the old marker + EndMarkerFilter).
-- END_REC:
+  # Typed strings type their characters only; press Enter explicitly to run them.
+  - "sudo whoami"
+  - Enter: 1
+  # Give the launched command time to finish.
+  - Wait: 2.0
+  - "exit"
+  - Enter: 1
+  # End the recording exactly here (replaces the old marker + EndMarkerFilter).
+  - END_REC:
 cols: 100
 rows: 40
