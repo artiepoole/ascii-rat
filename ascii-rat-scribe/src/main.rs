@@ -11,7 +11,8 @@ mod emit;
 
 use anyhow::Result;
 use ascii_rat_stage::util;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::{generate, Shell};
 use std::process::ExitCode;
 
 /// Record a live terminal session into a `demo.yaml` script.
@@ -22,6 +23,10 @@ use std::process::ExitCode;
     version
 )]
 struct Cli {
+    /// Print a shell completion script for the given shell and exit.
+    #[arg(long = "completions", value_name = "SHELL")]
+    completions: Option<Shell>,
+
     /// Where to write the produced script.
     #[arg(short = 'o', long = "output", default_value = "demo.yaml")]
     output: std::path::PathBuf,
@@ -70,6 +75,13 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if let Some(shell) = cli.completions {
+        let mut cmd = Cli::command();
+        let name = cmd.get_name().to_string();
+        generate(shell, &mut cmd, name, &mut std::io::stdout());
+        return Ok(());
+    }
+
     let command = if cli.command.is_empty() {
         vec![util::default_shell()]
     } else {
@@ -117,4 +129,27 @@ fn resolve_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
         if resolved_cols == 0 { DEFAULT_COLS } else { resolved_cols },
         if resolved_rows == 0 { DEFAULT_ROWS } else { resolved_rows },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn completions_generate_for_bash_zsh_fish() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let mut buf = Vec::new();
+            generate(shell, &mut Cli::command(), "ascii-rat-scribe", &mut buf);
+            let text = String::from_utf8(buf).expect("completions are UTF-8");
+            assert!(
+                text.contains("ascii-rat-scribe"),
+                "{shell} completions should mention the binary name"
+            );
+        }
+    }
 }
