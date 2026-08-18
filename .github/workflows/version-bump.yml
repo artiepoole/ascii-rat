@@ -1,0 +1,26 @@
+name: Version Bump Check
+on:
+  pull_request:
+jobs:
+  version-bump-check:
+    name: Check Version Bump for Rust Changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure all versions are bumped if there are any Rust changes
+        run: |
+          set -e
+          changed_rust_files=$(git diff --name-only --diff-filter=ACMRTUXB origin/${{ github.base_ref }}...HEAD | grep -E "\.rs$" || true)
+
+          if [ -z "$changed_rust_files" ]; then
+            echo "✅ No Rust source files modified - version bump not required."
+            exit 0
+          fi
+
+          echo "::group::Modified Rust source files"
+          echo "${changed_rust_files}"
+          echo "::endgroup::"
+
+          python3 scripts/ci/check_version_bump.py --base "origin/${{ github.base_ref }}"
