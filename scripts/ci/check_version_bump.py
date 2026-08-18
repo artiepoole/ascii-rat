@@ -166,11 +166,13 @@ def is_bumped(old_version: str, new_version: str) -> bool:
     return parse_semver(new_version) > parse_semver(old_version)
 
 
-def check_lockstep(versions: dict[str, tuple[str, str]]) -> list[str]:
+def check_lockstep(
+    versions: dict[str, tuple[str, str]], ref: str | None = None
+) -> list[str]:
     """Internal dependency versions must equal the workspace version."""
     workspace_version = versions[WORKSPACE_KEY][0]
     problems = []
-    for label, version in collect_internal_dependency_versions(None).items():
+    for label, version in collect_internal_dependency_versions(ref).items():
         if version != workspace_version:
             problems.append(
                 f"{label}: declares {version}, workspace version is "
@@ -179,16 +181,44 @@ def check_lockstep(versions: dict[str, tuple[str, str]]) -> list[str]:
     return problems
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--base",
-        default=f"origin/{os.environ.get('GITHUB_BASE_REF', 'main')}",
-        help="git ref to compare against (default: origin/$GITHUB_BASE_REF)",
-    )
-    args = parser.parse_args()
+def validate_mode(expected_version: str, ref: str | None) -> None:
+    """Check every version equals expected_version and deps are in lockstep."""
+    parse_semver(expected_version)
+    versions = collect_versions(ref)
+    where = ref or "the working tree"
 
-    old_versions = collect_versions(args.base)
+    print("::group::effective versions")
+    for key, (version, source) in versions.items():
+        print(f"{key}: {version}  ({source})")
+    print("::endgroup::")
+
+    problems = [
+        f"{key}: {version} (from {source})"
+        for key, (version, source) in versions.items()
+        if version != expected_version
+    ]
+    lockstep_problems = check_lockstep(versions, ref)
+
+    if problems or lockstep_problems:
+        lines = [
+            f"::error::Release version {expected_version} does not match "
+            f"{where}!%0A"
+        ]
+        if problems:
+            lines.append(f"Versions that are not {expected_version}:%0A")
+            lines += [f"- {problem}%0A" for problem in problems]
+        if lockstep_problems:
+            lines.append("%0AInternal dependency versions out of lockstep:%0A")
+            lines += [f"- {problem}%0A" for problem in lockstep_problems]
+        print("".join(lines))
+        sys.exit(1)
+
+    print(f"✅ All versions in {where} are {expected_version}.")
+
+
+def bump_mode(base: str) -> None:
+    """Check every version increased compared to the base ref."""
+    old_versions = collect_versions(base)
     new_versions = collect_versions(None)
 
     print("::group::effective versions")
@@ -246,6 +276,44 @@ def main() -> None:
         sys.exit(1)
 
     print("✅ All workspace versions were bumped.")
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse arguments; no subcommand means the default bump check."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--base",
+        default=f"origin/{os.environ.get('GITHUB_BASE_REF', 'main')}",
+        help="git ref to compare against (default: origin/$GITHUB_BASE_REF)",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="check every version equals a given release version",
+    )
+    validate_parser.add_argument(
+        "--expected-version",
+        required=True,
+        help="expected release version (for example: 0.1.1)",
+    )
+    validate_parser.add_argument(
+        "--ref",
+        required=False,
+        help="optional git ref to read manifests from (for example a commit SHA)",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.command == "validate":
+        validate_mode(args.expected_version, args.ref)
+        return
+
+    bump_mode(args.base)
 
 
 if __name__ == "__main__":
