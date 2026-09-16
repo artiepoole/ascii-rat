@@ -4,16 +4,24 @@
 //! it while mirroring the child's output to the real terminal, and translates
 //! the captured keystrokes + idle gaps into a `demo.yaml` script that
 //! `ascii-rat-bard` can replay.
+//!
+//! With `--sudo` the recorder also answers a password prompt itself, so a
+//! privileged program can be driven during a recording without the password
+//! being transcribed into the produced script.
 
 mod capture;
 mod decoder;
 mod emit;
+mod scrub;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use ascii_rat_stage::script::SudoConfig;
+use ascii_rat_stage::secret::SecretString;
 use ascii_rat_stage::util;
 use clap::{CommandFactory, Parser};
 use clap_complete::{Shell, generate};
 use std::process::ExitCode;
+use std::time::Duration;
 
 /// Record a live terminal session into a `demo.yaml` script.
 #[derive(Debug, Parser)]
@@ -57,6 +65,19 @@ struct Cli {
     #[arg(long = "typing-delay-ms", default_value_t = 75)]
     typing_delay_ms: u64,
 
+    /// Answer sudo password prompts during the recording. Asks once for the
+    /// password (hidden) before recording starts, then types it whenever a
+    /// prompt appears, so it is never transcribed into the script. The produced
+    /// script gets `sudo: true` so `ascii-rat-bard` does the same on replay.
+    #[arg(long = "sudo")]
+    sudo: bool,
+
+    /// Prompt substring that triggers typing the password (repeatable,
+    /// case-insensitive). Defaults to the built-in sudo prompts. Implies
+    /// `--sudo`.
+    #[arg(long = "sudo-prompt", value_name = "SUBSTRING")]
+    sudo_prompt: Vec<String>,
+
     /// The command (and its arguments) to run and record. Everything after
     /// `--` is treated as the command line. If omitted, your default shell is
     /// recorded so you get a clean terminal you can type into.
@@ -90,21 +111,59 @@ fn run(cli: Cli) -> Result<()> {
 
     let (cols, rows) = resolve_size(cli.cols, cli.rows);
 
+    // Resolve sudo handling before touching the terminal: the hidden password
+    // prompt needs cooked mode, and `capture::record` switches to raw mode.
+    let sudo_config = sudo_config(&cli);
+    let sudo = match &sudo_config {
+        Some(cfg) => Some(capture::SudoAuth {
+            // Wrapped immediately: `prompt_password` hands back a plain String
+            // that nothing would otherwise wipe.
+            password: SecretString::new(
+                rpassword::prompt_password("Sudo password: ").with_context(|| {
+                    "failed to read the sudo password (a terminal is required for the hidden \
+                     prompt; run in an interactive terminal)"
+                })?,
+            ),
+            prompts: cfg.prompts.clone(),
+            char_delay: Duration::from_millis(cli.typing_delay_ms),
+        }),
+        None => None,
+    };
+
     let options = capture::CaptureOptions {
         command,
         cols,
         rows,
         wait_threshold_ms: cli.wait_threshold_ms,
         wait_round_ms: cli.round_wait_ms,
+        sudo,
     };
 
-    let actions = capture::record(&options)?;
+    let capture = capture::record(&options)?;
+    let mut actions = capture.actions;
+
+    // Raw mode is restored by now, so warnings can be printed normally. The
+    // password is borrowed from `options` rather than copied: a second buffer
+    // would be a second thing to wipe.
+    if let Some(auth) = options.sudo.as_ref() {
+        report_sudo(capture.sudo_types);
+        let report = scrub::scrub_password(&mut actions, auth.password.expose());
+        if report.leaked() {
+            eprintln!(
+                "warning: the password was found in the captured keystrokes and has been \
+                 removed from the script ({} action(s)). This happens when a prompt is not \
+                 matched and you type the password by hand; consider --sudo-prompt.",
+                report.removed
+            );
+        }
+    }
 
     let script = emit::ScriptDoc {
         output_file: cli.cast.clone(),
         cols,
         rows,
         typing_delay_ms: cli.typing_delay_ms,
+        sudo: sudo_config,
         actions,
     };
     emit::write_script(&script, &cli.output)?;
@@ -115,6 +174,43 @@ fn run(cli: Cli) -> Result<()> {
         cli.output.display()
     );
     Ok(())
+}
+
+/// Build the sudo configuration from the CLI, or `None` when sudo handling was
+/// not requested. `--sudo-prompt` implies `--sudo`, so giving prompts alone is
+/// enough to enable it.
+fn sudo_config(cli: &Cli) -> Option<SudoConfig> {
+    if !cli.sudo && cli.sudo_prompt.is_empty() {
+        return None;
+    }
+    Some(if cli.sudo_prompt.is_empty() {
+        SudoConfig::default()
+    } else {
+        SudoConfig {
+            prompts: cli.sudo_prompt.clone(),
+        }
+    })
+}
+
+/// Warn about the two ways `--sudo` can disagree with what replay will do.
+fn report_sudo(sudo_types: usize) {
+    match sudo_types {
+        // The flag was given but the prompt never showed up. Most likely the
+        // prompt wording differs from the configured needles.
+        0 => eprintln!(
+            "warning: --sudo was given but no password prompt matched, so the password was \
+             never used. If the program did prompt, set --sudo-prompt to a substring of its \
+             prompt."
+        ),
+        1 => {}
+        // `ascii-rat-bard` types the password for the first prompt only: its
+        // one-shot latch is never reset, so a second prompt goes unanswered.
+        n => eprintln!(
+            "warning: answered {n} password prompts, but ascii-rat-bard only answers the \
+             first one on replay. The replay will stall at the second prompt unless you \
+             restructure the script or grant passwordless sudo for this command."
+        ),
+    }
 }
 
 /// Resolve the PTY size, honouring explicit `--cols`/`--rows` and otherwise

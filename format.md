@@ -162,6 +162,15 @@ sudo:
     - "authentication required"
 ```
 
+`ascii-rat-scribe --sudo` writes this field for you, so a session recorded
+against a privileged program replays without further editing. It emits the
+`sudo: true` form when the prompts are the defaults and the mapping form when
+`--sudo-prompt` was used.
+
+Only the *first* prompt of a replay is answered: the password is typed once and
+then not again, so a script whose program authenticates twice will stall at the
+second prompt.
+
 ## Filters
 
 The optional `filters` list applies post-processing passes over the recorded

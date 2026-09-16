@@ -6,6 +6,7 @@
 use anyhow::{Context, Result, bail};
 use ascii_rat_stage::cast::AsciiCast;
 use ascii_rat_stage::script::Script;
+use ascii_rat_stage::secret::SecretString;
 use ascii_rat_stage::util;
 use clap::{CommandFactory, Parser};
 use clap_complete::{Shell, generate};
@@ -81,18 +82,24 @@ fn run(cli: Cli) -> Result<()> {
 
     if !cli.dont_run {
         // If the script has a top-level `sudo:` block, prompt once (hidden)
-        // before recording starts. Never stored in the script.
+        // before recording starts. Never stored in the script, and wiped from
+        // memory when it goes out of scope: `prompt_password` returns a plain
+        // String that nothing would otherwise overwrite.
         let sudo_password = if script.sudo_enabled() {
             let pw = rpassword::prompt_password("Sudo password: ").with_context(|| {
                 "failed to read the sudo password (a terminal is required for the hidden \
                  prompt; run in an interactive terminal)"
             })?;
-            Some(pw)
+            Some(SecretString::new(pw))
         } else {
             None
         };
 
-        let cast = script.run(cli.quiet, cli.watch, sudo_password.as_deref())?;
+        let cast = script.run(
+            cli.quiet,
+            cli.watch,
+            sudo_password.as_ref().map(SecretString::expose),
+        )?;
         cast.save(&output_file)
             .with_context(|| format!("failed to save cast to {output_file:?}"))?;
         if !cli.quiet {

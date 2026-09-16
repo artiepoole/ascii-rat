@@ -7,4 +7,6 @@ pub mod cast;
 pub mod filters;
 pub mod pty;
 pub mod script;
+pub mod secret;
+pub mod sudo;
 pub mod util;

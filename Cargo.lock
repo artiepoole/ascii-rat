@@ -87,6 +87,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "rpassword",
  "serde",
  "serde_yaml",
 ]

@@ -7,7 +7,7 @@
 //! matching how hand-authored scripts terminate.
 
 use anyhow::{Context, Result};
-use ascii_rat_stage::script::Action;
+use ascii_rat_stage::script::{Action, SudoConfig};
 use serde::Serialize;
 use std::path::Path;
 
@@ -19,6 +19,9 @@ pub struct ScriptDoc {
     pub rows: u16,
     /// Per-character typing delay written into the header (milliseconds).
     pub typing_delay_ms: u64,
+    /// Sudo handling to record in the header, so `ascii-rat-bard` answers the
+    /// password prompt itself on replay. `None` omits the field entirely.
+    pub sudo: Option<SudoConfig>,
     /// The captured actions (without the trailing `END_REC`, which is added
     /// during emission).
     pub actions: Vec<Action>,
@@ -40,6 +43,12 @@ const DEFAULT_POST_NL_DELAY_MS: u64 = 500;
 /// it is ignored when the file is loaded back through `Script::from_yaml`.
 const HEADER_COMMENT: &str = "# recorded by ascii-rat-scribe";
 
+/// Extra comment line added when the recording had a password prompt answered
+/// for it, explaining where the password went (nowhere) and what happens on
+/// replay. Written after [`HEADER_COMMENT`] so the first line is unchanged.
+const SUDO_COMMENT: &str = "# sudo: the password was typed during recording but not stored here;\n\
+     # ascii-rat-bard will ask for it again when replaying this script.";
+
 /// The serializable shape written to YAML.
 ///
 /// Field names and types mirror `ascii-rat-stage`'s `ScriptRaw` so the produced
@@ -54,6 +63,10 @@ struct ScriptYaml {
     typing_delay_ms: u64,
     pre_nl_delay_ms: u64,
     post_nl_delay_ms: u64,
+    /// Omitted entirely when there is no sudo handling, so scripts recorded
+    /// without `--sudo` are byte-identical to before this field existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sudo: Option<SudoConfig>,
     actions: Vec<Action>,
 }
 
@@ -74,16 +87,23 @@ impl ScriptDoc {
             typing_delay_ms: self.typing_delay_ms,
             pre_nl_delay_ms: DEFAULT_PRE_NL_DELAY_MS,
             post_nl_delay_ms: DEFAULT_POST_NL_DELAY_MS,
+            sudo: self.sudo.clone(),
             actions,
         }
     }
 
     /// Serialize the document to a YAML string, prefixed with the
-    /// `# recorded by ascii-rat-scribe` header comment.
+    /// `# recorded by ascii-rat-scribe` header comment (plus a note about the
+    /// password when sudo handling was used).
     pub fn to_yaml_string(&self) -> Result<String> {
         let body = serde_yaml::to_string(&self.to_yaml_doc())
             .context("failed to serialize script to YAML")?;
-        Ok(format!("{HEADER_COMMENT}\n{body}"))
+        let mut header = String::from(HEADER_COMMENT);
+        if self.sudo.is_some() {
+            header.push('\n');
+            header.push_str(SUDO_COMMENT);
+        }
+        Ok(format!("{header}\n{body}"))
     }
 }
 
@@ -105,6 +125,7 @@ mod tests {
             cols: 100,
             rows: 40,
             typing_delay_ms: 75,
+            sudo: None,
             actions,
         }
     }
@@ -179,5 +200,60 @@ mod tests {
         let yaml = doc.to_yaml_string().unwrap();
         let ends = yaml.matches("END_REC").count();
         assert_eq!(ends, 1, "END_REC should appear exactly once:\n{yaml}");
+    }
+
+    /// Round-trip a doc through the real loader and return the parsed script.
+    fn reload(doc: &ScriptDoc, tag: &str) -> Script {
+        let yaml = doc.to_yaml_string().expect("serialize");
+        let path = std::env::temp_dir().join(format!("scribe-{tag}-{}.yaml", std::process::id()));
+        std::fs::write(&path, &yaml).unwrap();
+        let script = Script::from_yaml(&path).expect("emitted YAML should parse");
+        std::fs::remove_file(&path).ok();
+        script
+    }
+
+    #[test]
+    fn sudo_field_is_omitted_when_not_recorded() {
+        // Scripts recorded without --sudo must not gain a sudo field, so bard
+        // does not start asking for a password it has no use for.
+        let doc = sample_doc(vec![Action::Text("ls".to_string())]);
+        let yaml = doc.to_yaml_string().expect("serialize");
+        assert!(
+            !yaml.contains("sudo"),
+            "no sudo field or comment expected:\n{yaml}"
+        );
+        assert!(!reload(&doc, "nosudo").sudo_enabled());
+    }
+
+    #[test]
+    fn default_sudo_is_emitted_and_enables_replay_handling() {
+        let mut doc = sample_doc(vec![Action::Text("sudo whoami".to_string())]);
+        doc.sudo = Some(SudoConfig::default());
+        let yaml = doc.to_yaml_string().expect("serialize");
+        // Default prompts serialize back to the tidy flag form.
+        assert!(yaml.contains("sudo: true"), "expected sudo: true:\n{yaml}");
+        // The explanatory comment is present, and the identifying first line is
+        // still the very first line.
+        assert!(yaml.starts_with("# recorded by ascii-rat-scribe\n"));
+        assert!(yaml.contains("# ascii-rat-bard will ask for it again"));
+
+        let script = reload(&doc, "sudotrue");
+        assert!(script.sudo_enabled());
+        assert_eq!(
+            script.sudo.as_ref().unwrap().prompts,
+            SudoConfig::default().prompts
+        );
+    }
+
+    #[test]
+    fn custom_sudo_prompts_survive_the_round_trip() {
+        let prompts = vec!["authentication required".to_string()];
+        let mut doc = sample_doc(vec![Action::Text("snap-rat".to_string())]);
+        doc.sudo = Some(SudoConfig {
+            prompts: prompts.clone(),
+        });
+        let script = reload(&doc, "sudoprompts");
+        assert!(script.sudo_enabled());
+        assert_eq!(script.sudo.as_ref().unwrap().prompts, prompts);
     }
 }

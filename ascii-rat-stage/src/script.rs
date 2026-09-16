@@ -1014,6 +1014,26 @@ impl Default for SudoConfig {
     }
 }
 
+/// Serialize back into whichever of the two accepted YAML shapes is tidier:
+/// the bare flag `sudo: true` when the prompts are the built-in defaults, and
+/// the `sudo: {prompts: [...]}` mapping otherwise.
+///
+/// Both forms are accepted by [`deserialize_sudo`] (via the untagged
+/// [`SudoField`]), so a serialized config always round-trips.
+impl Serialize for SudoConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.prompts == default_sudo_prompts() {
+            return serializer.serialize_bool(true);
+        }
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("prompts", &self.prompts)?;
+        map.end()
+    }
+}
+
 /// Accepts either `sudo: true`/`false` (a flag enabling default prompts) or a
 /// `sudo:` mapping (possibly with an explicit `prompts:` list).
 #[derive(Debug, Clone, Deserialize)]
@@ -2971,6 +2991,55 @@ actions:
         let yaml = script_yaml_with_sudo("sudo: false");
         let script: Script = serde_yaml::from_str(&yaml).expect("should parse sudo: false");
         assert!(!script.sudo_enabled());
+    }
+
+    #[test]
+    fn sudo_default_config_serializes_as_the_bare_flag() {
+        // The tidy form: default prompts collapse back to `sudo: true` rather
+        // than spelling out the built-in list.
+        let yaml = serde_yaml::to_string(&SudoConfig::default()).expect("serialize");
+        assert_eq!(yaml.trim(), "true");
+    }
+
+    #[test]
+    fn sudo_custom_prompts_serialize_as_a_mapping() {
+        let cfg = SudoConfig {
+            prompts: vec!["Password:".to_string()],
+        };
+        let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+        assert!(
+            yaml.contains("prompts:") && yaml.contains("Password:"),
+            "custom prompts should serialize as a mapping:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn serialized_sudo_round_trips_through_a_script() {
+        // Whichever shape `SudoConfig` serializes to must be accepted again by
+        // `deserialize_sudo`, so scribe-emitted scripts always load back.
+        for cfg in [
+            SudoConfig::default(),
+            SudoConfig {
+                prompts: vec!["authentication required".to_string()],
+            },
+        ] {
+            let fragment = serde_yaml::to_string(&cfg).expect("serialize");
+            // Inline (`sudo: true`) or block (`sudo:\n  prompts:`) as needed.
+            let fragment = if fragment.trim() == "true" {
+                "sudo: true".to_string()
+            } else {
+                let indented: String = fragment
+                    .lines()
+                    .map(|l| format!("  {l}\n"))
+                    .collect::<String>();
+                format!("sudo:\n{indented}")
+            };
+            let yaml = script_yaml_with_sudo(&fragment);
+            let script: Script =
+                serde_yaml::from_str(&yaml).expect("serialized sudo should parse back");
+            assert!(script.sudo_enabled());
+            assert_eq!(script.sudo.as_ref().unwrap(), &cfg);
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ What sets it apart from other scripted-recording tools:
 - **Record to YAML** — capture a live session into an editable script, retime and trim by hand, replay deterministically.
 - **Real PTY** — full-screen TUIs (`htop`, `nano`) render correctly; not a faked terminal.
 - **Key-timing jitter** — any delay can be a `[low, high]` random range for human-like typing.
-- **`sudo` passthrough** — answers password prompts during recording without storing the password.
+- **`sudo` passthrough** — both tools answer password prompts for you, without storing the password.
 - **Modifier keys** — `Ctrl-O`, `Shift-Tab`, `Alt-x` and friends drive editors and TUIs.
 - **Key shorthand** — `Down: 6` repeats a keypress; `Keys: [Ctrl-O, Enter, Ctrl-X]` sends a sequence.
 
@@ -153,6 +153,7 @@ the script.
 | `-o`, `--output <FILE>` | `demo.yaml` | Script output path. |
 | `--cast <FILE>` | `demo.cast` | `output_file` recorded into the script. |
 | `--cols <N>` / `--rows <N>` | current terminal | PTY size. |
+| `--sudo` | off | Answer password prompts while recording (see [`sudo`](#sudo)). |
 
 Tuning knobs (`--wait-threshold-ms`, `--round-wait-ms`, `--typing-delay-ms`):
 [`ascii-rat-scribe/README.md`](ascii-rat-scribe/README.md) or `--help`.
@@ -194,9 +195,12 @@ asciinema play examples/hello-world.cast
 
 ### `sudo`
 
-Add a top-level `sudo: true` to the script and bard asks for the password once
-(hidden prompt) before recording, then types it when a sudo prompt appears
-(matches `assword` / `[sudo]`, case-insensitive). Custom prompts:
+Both tools can answer a password prompt for you, asking once for the password
+with a hidden prompt and never writing it to the script or the `.cast`.
+
+**Replaying** (`ascii-rat-bard`) — add a top-level `sudo: true` to the script and
+bard asks for the password before recording, then types it when a sudo prompt
+appears (matches `assword` / `[sudo]`, case-insensitive). Custom prompts:
 
 ```yaml
 sudo:
@@ -204,8 +208,23 @@ sudo:
     - "Password:"
 ```
 
-The password is never written to the script or the `.cast`. See
-[`examples/sudo-command.yaml`](examples/sudo-command.yaml).
+See [`examples/sudo-command.yaml`](examples/sudo-command.yaml).
+
+**Recording** (`ascii-rat-scribe`) — pass `--sudo` to drive a privileged program
+during a live capture:
+
+```bash
+ascii-rat-scribe --sudo -o demo.yaml --cast demo.cast -- sudo your-app
+```
+
+Scribe types the password itself, so it never passes through the keystroke
+decoder and cannot be transcribed into `demo.yaml`. The produced script gets
+`sudo: true` so replay works the same way. Use `--sudo-prompt <SUBSTRING>`
+(repeatable) for a program with its own authentication widget.
+
+Caveats, in [`ascii-rat-scribe/README.md`](ascii-rat-scribe/README.md): an
+unmatched prompt is not answered (scribe scrubs a hand-typed password and warns),
+and bard answers only the first prompt per replay.
 
 ## Script format (`demo.yaml`)
 
