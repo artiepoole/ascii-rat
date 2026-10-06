@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/artiepoole/ascii-rat"
@@ -16,7 +16,7 @@ repository = "https://github.com/artiepoole/ascii-rat"
 # Internal crate: `path` is used for local builds, `version` is required to
 # publish the dependent crates to crates.io. Keep this in lockstep with
 # [workspace.package] version above.
-ascii-rat-stage = { path = "ascii-rat-stage", version = "0.1.1" }
+ascii-rat-stage = { path = "ascii-rat-stage", version = "0.1.2" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"

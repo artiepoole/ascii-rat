@@ -40,7 +40,7 @@ These keys sit at the top level of the document, alongside `actions`.
 
 ## Delay fields
 
-Six delays control the timing of a replay. Each can be written in seconds under
+Eight delays control the timing of a replay. Each can be written in seconds under
 its plain name or in milliseconds under the `_ms` twin — use one spelling, not
 both. Each value is either a single number, or a `[low, high]` list from which a
 random value is picked per use, for a human-like feel.
@@ -53,6 +53,8 @@ random value is picked per use, for a human-like feel.
 | **`pre_nl_delay`** | `pre_nl_delay_ms` | Delay before the newline at the end of a typed line. | 0.2 |
 | **`post_nl_delay`** | `post_nl_delay_ms` | Delay after that newline. | 0.5 |
 | **`key_delay`** | `key_delay_ms` | Delay after each keypress sent by a `Key`/`Keys` action. | small built-in |
+| **`inline_comment_show`** | `inline_comment_show_ms` | How long an `InlineComment` note stays readable on screen. | 1.0 |
+| **`inline_comment_settle`** | `inline_comment_settle_ms` | How long an `InlineComment` holds the cleared line after wiping the note. | 0.2 |
 
 All are optional; the defaults match what `ascii-rat-scribe` writes, so a
 minimal script only needs `output_file` (plus `cols`/`rows`).
@@ -132,12 +134,34 @@ terminal output the viewer sees typed and cleared.
 ```
 
 The text is typed verbatim, so include your own `# ` prefix if you want it to
-read like a shell comment. The note lingers for a default `0.4` seconds before
-and after it is wiped; use the mapping form to change how long it shows:
+read like a shell comment. Two independent pauses control the pacing:
+
+- **`show`** — how long the note stays readable on screen. Defaults to `1.0` s.
+- **`settle`** — how long the *cleared* line is held after `Ctrl-U` wipes it,
+  before the next action types into it. Defaults to `0.2` s.
+
+They are separate precisely so a note that takes a while to read does not drag
+an equally long blank prompt behind it. Set either for the whole script with the
+matching top-level field:
 
 ```yaml
-- InlineComment: { text: "# read this first", show: 1.5 }
+inline_comment_show: 4.0            # every note is readable for 4 s
+inline_comment_settle: 0.1          # but the cleared line is held only 0.1 s
+inline_comment_show_ms: 4000        # both have an `_ms` spelling
+inline_comment_show: [3.0, 5.0]     # and both accept a [low, high] range
 ```
+
+Or override one note with the mapping form, which wins over the header:
+
+```yaml
+- InlineComment: { text: "# read this first", show: 6.0 }
+- InlineComment: { text: "# and this", show: 6.0, settle: 0.0 }
+```
+
+Both keys are optional in the mapping form, so `{ text: "# a note" }` behaves
+exactly like the bare string, and `{ text: ..., settle: 0.0 }` changes the pause
+without restating the show duration. Anything you omit is inherited from the
+header, and stays inherited if the script is re-serialized.
 
 ## Sudo
 
