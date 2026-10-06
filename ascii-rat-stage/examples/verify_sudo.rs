@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
         post_nl_delay: (0.8, 0.81),
         key_delay: (0.0, 0.02),
         inline_comment_show: (0.0, 0.0),
+        inline_comment_settle: (0.0, 0.0),
         with_comments: false,
         comments_at_top: false,
         // Typed strings no longer submit on their own; press Enter explicitly to

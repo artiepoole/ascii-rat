@@ -251,9 +251,11 @@ Header notes:
 - Every delay is a number or `[low, high]`; spell in seconds (`typing_delay:`)
   or ms (`typing_delay_ms:`). Available: `start_delay`, `end_delay`,
   `typing_delay`, `pre_nl_delay`, `post_nl_delay`, `key_delay`,
-  `inline_comment_show`.
-- `inline_comment_show:` sets how long every `InlineComment` note lingers
-  (default `1.0` s); `InlineComment: { text: ..., show: 2.5 }` overrides one.
+  `inline_comment_show`, `inline_comment_settle`.
+- `inline_comment_show:` is how long an `InlineComment` note stays readable
+  (default `1.0` s); `inline_comment_settle:` is the much shorter pause on the
+  cleared line afterwards (default `0.2` s). Either can be overridden per note:
+  `InlineComment: { text: ..., show: 6.0, settle: 0.0 }`.
 - `with_comments: true` renders `Comment` captions; `comments_at_top: true`
   anchors them at the top.
 - `filters:` — post-processing passes (regex scrubbing, marker trimming), see
