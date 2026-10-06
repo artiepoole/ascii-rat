@@ -69,7 +69,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "ascii-rat-bard"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "ascii-rat-stage",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "ascii-rat-scribe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "ascii-rat-stage",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "ascii-rat-stage"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "portable-pty",
