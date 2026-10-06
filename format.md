@@ -40,7 +40,7 @@ These keys sit at the top level of the document, alongside `actions`.
 
 ## Delay fields
 
-Six delays control the timing of a replay. Each can be written in seconds under
+Seven delays control the timing of a replay. Each can be written in seconds under
 its plain name or in milliseconds under the `_ms` twin — use one spelling, not
 both. Each value is either a single number, or a `[low, high]` list from which a
 random value is picked per use, for a human-like feel.
@@ -53,6 +53,7 @@ random value is picked per use, for a human-like feel.
 | **`pre_nl_delay`** | `pre_nl_delay_ms` | Delay before the newline at the end of a typed line. | 0.2 |
 | **`post_nl_delay`** | `post_nl_delay_ms` | Delay after that newline. | 0.5 |
 | **`key_delay`** | `key_delay_ms` | Delay after each keypress sent by a `Key`/`Keys` action. | small built-in |
+| **`inline_comment_show`** | `inline_comment_show_ms` | How long an `InlineComment` note lingers (and settles after being wiped). | 1.0 |
 
 All are optional; the defaults match what `ascii-rat-scribe` writes, so a
 minimal script only needs `output_file` (plus `cols`/`rows`).
@@ -132,12 +133,28 @@ terminal output the viewer sees typed and cleared.
 ```
 
 The text is typed verbatim, so include your own `# ` prefix if you want it to
-read like a shell comment. The note lingers for a default `0.4` seconds before
-and after it is wiped; use the mapping form to change how long it shows:
+read like a shell comment. The note lingers for `1.0` seconds before and after
+it is wiped. Change that for the whole script with the top-level
+`inline_comment_show` field:
+
+```yaml
+inline_comment_show: 2.5          # every note lingers 2.5 s, in seconds
+inline_comment_show_ms: 2500      # the same, in milliseconds
+inline_comment_show: [1.5, 2.5]   # a random 1.5-2.5 s, per note
+```
+
+Or override a single note with the mapping form, which wins over the header:
 
 ```yaml
 - InlineComment: { text: "# read this first", show: 1.5 }
 ```
+
+`show` is optional in the mapping form, so `{ text: "# a note" }` behaves exactly
+like the bare string and inherits `inline_comment_show`.
+
+Note the duration is slept twice — once while the note is on screen, then again
+as a settle after `Ctrl-U` wipes it — so `inline_comment_show: 2.5` adds 5
+seconds per note, half of it on a cleared prompt.
 
 ## Sudo
 

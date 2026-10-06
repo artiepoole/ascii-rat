@@ -34,8 +34,13 @@ const DEFAULT_EXPECT_TIMEOUT: f64 = 30.0;
 
 /// Default show duration (seconds) for an `InlineComment` action: how long the
 /// typed note lingers on screen before it is wiped, and again the settle after
-/// wiping it. Matches the hand-written `Wait: 0.4` this shortcut replaces.
-const DEFAULT_INLINE_COMMENT_SHOW: f64 = 0.4;
+/// wiping it.
+///
+/// Used when neither the action nor the script header sets a duration. A note is
+/// narration the viewer has to read, so the default is a full second; override it
+/// for the whole script with the top-level `inline_comment_show` field, or per
+/// action with the `InlineComment: {text, show}` mapping form.
+const DEFAULT_INLINE_COMMENT_SHOW: f64 = 1.0;
 
 /// The `Ctrl-U` keypress used by an `InlineComment` action to wipe the typed
 /// note (kill the whole input line) before continuing.
@@ -107,9 +112,14 @@ pub enum Action {
     /// four-action pattern used to flash an on-screen note (unlike `Comment`,
     /// which is a cast caption and never typed into the terminal). The `text` is
     /// typed verbatim (so include your own `# ` prefix if you want it to look
-    /// like a shell comment), lingers for `show` seconds, is cleared with
-    /// `Ctrl-U`, then settles for another `show` seconds.
-    InlineComment { text: String, show: f64 },
+    /// like a shell comment), lingers for the show duration, is cleared with
+    /// `Ctrl-U`, then settles for that duration again.
+    ///
+    /// `show` is the per-action override in seconds. `None` means "inherit",
+    /// and the script's [`Script::inline_comment_show`] range is sampled at
+    /// replay time instead — keeping the distinction lets a script that never
+    /// overrides the duration round-trip back to the terse string form.
+    InlineComment { text: String, show: Option<f64> },
     /// Sends a sequence of named keys (e.g. `Down`, `Enter`, `Esc`) in order.
     ///
     /// A single `Key` action can queue several keypresses: either the legacy
@@ -744,11 +754,12 @@ impl<'de> Deserialize<'de> for Action {
                     },
                     // `InlineComment: "# note"` — type the note, flash it, then
                     // wipe it with Ctrl-U. The mapping form `InlineComment: {text:
-                    // "..", show: 1.0}` overrides how long it lingers.
+                    // "..", show: 1.0}` overrides how long it lingers; without a
+                    // `show` the script-level `inline_comment_show` applies.
                     "InlineComment" => {
                         let raw: InlineCommentField = map.next_value()?;
                         let (text, show) = match raw {
-                            InlineCommentField::Text(text) => (text, DEFAULT_INLINE_COMMENT_SHOW),
+                            InlineCommentField::Text(text) => (text, None),
                             InlineCommentField::Full { text, show } => (text, show),
                         };
                         if text.is_empty() {
@@ -756,7 +767,7 @@ impl<'de> Deserialize<'de> for Action {
                                 "`InlineComment` text must not be empty",
                             ));
                         }
-                        if show < 0.0 {
+                        if show.is_some_and(|show| show < 0.0) {
                             return Err(de::Error::custom("InlineComment show must be >= 0"));
                         }
                         Action::InlineComment { text, show }
@@ -890,19 +901,19 @@ impl Serialize for Action {
             }
             Action::InlineComment { text, show } => {
                 let mut map = serializer.serialize_map(Some(1))?;
-                // Emit the bare-string form when the show duration is the
-                // default, so the common case stays terse; otherwise emit the
-                // mapping so the custom duration round-trips.
-                if *show == DEFAULT_INLINE_COMMENT_SHOW {
-                    map.serialize_entry("InlineComment", text)?;
-                } else {
-                    map.serialize_entry(
+                // Emit the bare-string form when the action carries no explicit
+                // duration (it inherits the script's `inline_comment_show`), so
+                // the common case stays terse; otherwise emit the mapping so the
+                // per-action override round-trips.
+                match show {
+                    None => map.serialize_entry("InlineComment", text)?,
+                    Some(show) => map.serialize_entry(
                         "InlineComment",
                         &InlineCommentPayload {
                             text: text.clone(),
                             show: *show,
                         },
-                    )?;
+                    )?,
                 }
                 map.end()
             }
@@ -969,14 +980,22 @@ struct ExpectPayload {
     timeout: f64,
 }
 
-/// The value of an `InlineComment:` action: either a bare string (typed with the
-/// default show duration) or a `{text, show}` mapping overriding how long the
-/// note lingers before it is wiped.
+/// The value of an `InlineComment:` action: either a bare string (inheriting the
+/// script's `inline_comment_show` duration) or a `{text, show}` mapping
+/// overriding how long that one note lingers before it is wiped.
+///
+/// `show` is optional in the mapping form too, so `{text: ".."}` is accepted and
+/// behaves exactly like the bare string rather than failing to match either
+/// variant of this untagged enum.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum InlineCommentField {
     Text(String),
-    Full { text: String, show: f64 },
+    Full {
+        text: String,
+        #[serde(default)]
+        show: Option<f64>,
+    },
 }
 
 /// The `{text, show}` mapping form written when an `InlineComment` action carries
@@ -1169,6 +1188,10 @@ struct ScriptRaw {
     #[serde(default)]
     key_delay_ms: Option<DelaySpec>,
     #[serde(default)]
+    inline_comment_show: Option<DelaySpec>,
+    #[serde(default)]
+    inline_comment_show_ms: Option<DelaySpec>,
+    #[serde(default)]
     with_comments: bool,
     #[serde(default)]
     comments_at_top: bool,
@@ -1206,6 +1229,12 @@ pub struct Script {
     /// by a `Key` action (independent of line/newline timing). Defaults to
     /// [`default_key_delay`] when omitted so existing scripts keep working.
     pub key_delay: (f64, f64),
+    /// `[low, high]` uniform range for how long an `InlineComment` note lingers
+    /// before it is wiped (and the settle after wiping it).
+    ///
+    /// The script-wide default, sampled per action; an `InlineComment` carrying
+    /// its own `show` ignores this. Defaults to [`DEFAULT_INLINE_COMMENT_SHOW`].
+    pub inline_comment_show: (f64, f64),
     pub with_comments: bool,
     pub comments_at_top: bool,
     pub actions: Vec<Action>,
@@ -1270,6 +1299,19 @@ impl<'de> Deserialize<'de> for Script {
             Some(default_key_delay()),
         )
         .map_err(de::Error::custom)?;
+        // The script-wide `InlineComment` show duration. Validated here (unlike
+        // the delays above) to match the per-action `show` check, since a
+        // negative duration panics `Duration::from_secs_f64` at replay time.
+        let inline_comment_show = resolve_delay(
+            raw.inline_comment_show,
+            raw.inline_comment_show_ms,
+            "inline_comment_show",
+            Some((DEFAULT_INLINE_COMMENT_SHOW, DEFAULT_INLINE_COMMENT_SHOW)),
+        )
+        .map_err(de::Error::custom)?;
+        if inline_comment_show.0 < 0.0 || inline_comment_show.1 < 0.0 {
+            return Err(de::Error::custom("inline_comment_show must be >= 0"));
+        }
 
         Ok(Script {
             output_file: raw.output_file,
@@ -1279,6 +1321,7 @@ impl<'de> Deserialize<'de> for Script {
             pre_nl_delay,
             post_nl_delay,
             key_delay,
+            inline_comment_show,
             with_comments: raw.with_comments,
             comments_at_top: raw.comments_at_top,
             actions: raw.actions,
@@ -1460,6 +1503,11 @@ impl Script {
                     // submitted), let it linger, then wipe the whole line with
                     // Ctrl-U and settle. This is the `Text + Wait + Ctrl-U +
                     // Wait` pattern collapsed into one action.
+                    //
+                    // An action without its own `show` inherits the script-wide
+                    // `inline_comment_show`, sampled once here so the linger and
+                    // the post-wipe settle use the same duration.
+                    let show = show.unwrap_or_else(|| sample(&mut rng, self.inline_comment_show));
                     send_line(
                         &mut session,
                         text,
@@ -1470,7 +1518,7 @@ impl Script {
                         &mut output_chunks,
                         watch,
                     )?;
-                    sleep(Duration::from_secs_f64(*show));
+                    sleep(Duration::from_secs_f64(show));
                     mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
                     send_keys(
                         &mut session,
@@ -1480,7 +1528,7 @@ impl Script {
                         &mut output_chunks,
                         watch,
                     )?;
-                    sleep(Duration::from_secs_f64(*show));
+                    sleep(Duration::from_secs_f64(show));
                     mirror_and_capture(&mut output_chunks, session.drain_output(), watch);
                     // Nothing was submitted, so no newline shift for a following
                     // marker/comment.
@@ -2434,11 +2482,11 @@ mod tests {
             },
             Action::InlineComment {
                 text: "# a note".to_string(),
-                show: DEFAULT_INLINE_COMMENT_SHOW,
+                show: None,
             },
             Action::InlineComment {
                 text: "# lingers longer".to_string(),
-                show: 1.5,
+                show: Some(1.5),
             },
             Action::Key {
                 keys: vec![
@@ -2656,6 +2704,19 @@ actions:
         )
     }
 
+    /// A minimal script with extra top-level fields, for exercising header
+    /// parsing (one `InlineComment` action, which inherits its show duration).
+    fn script_yaml_with_header(header_fragment: &str) -> String {
+        format!(
+            r##"
+output_file: "out.cast"
+{header_fragment}
+actions:
+- InlineComment: "# a note"
+"##
+        )
+    }
+
     #[test]
     fn parse_wait_action() {
         let yaml = script_yaml_with_actions("- Wait: 2.0");
@@ -2721,9 +2782,9 @@ actions:
     }
 
     #[test]
-    fn parse_inline_comment_scalar_uses_default_show() {
+    fn parse_inline_comment_scalar_inherits_show() {
         // `InlineComment: "# note"` types the note, flashes it, and wipes it,
-        // using the default show duration.
+        // carrying no duration of its own so the script-wide one applies.
         let yaml = script_yaml_with_actions("- InlineComment: \"# a note\"");
         let script: Script =
             serde_yaml::from_str(&yaml).expect("should parse InlineComment action");
@@ -2731,14 +2792,19 @@ actions:
             script.actions[0],
             Action::InlineComment {
                 text: "# a note".to_string(),
-                show: DEFAULT_INLINE_COMMENT_SHOW,
+                show: None,
             }
+        );
+        // With no header field either, the script-wide default applies.
+        assert_eq!(
+            script.inline_comment_show,
+            (DEFAULT_INLINE_COMMENT_SHOW, DEFAULT_INLINE_COMMENT_SHOW)
         );
     }
 
     #[test]
     fn parse_inline_comment_mapping_overrides_show() {
-        // The `{text, show}` mapping form overrides the default show duration.
+        // The `{text, show}` mapping form overrides the show duration.
         let yaml = script_yaml_with_actions("- InlineComment: {text: \"# note\", show: 1.5}");
         let script: Script =
             serde_yaml::from_str(&yaml).expect("should parse InlineComment mapping");
@@ -2746,9 +2812,34 @@ actions:
             script.actions[0],
             Action::InlineComment {
                 text: "# note".to_string(),
-                show: 1.5,
+                show: Some(1.5),
             }
         );
+    }
+
+    #[test]
+    fn parse_inline_comment_mapping_without_show_inherits() {
+        // `show` is optional in the mapping form too, so `{text: ".."}` behaves
+        // exactly like the bare string instead of failing to match the untagged
+        // enum with a cryptic error.
+        let yaml = script_yaml_with_actions("- InlineComment: {text: \"# note\"}");
+        let script: Script =
+            serde_yaml::from_str(&yaml).expect("should parse InlineComment mapping without show");
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# note".to_string(),
+                show: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_inline_comment_negative_show_fails() {
+        let yaml = script_yaml_with_actions("- InlineComment: {text: \"# note\", show: -1.0}");
+        let err = serde_yaml::from_str::<Script>(&yaml)
+            .expect_err("a negative InlineComment show should fail");
+        assert!(err.to_string().contains(">= 0"), "error was: {err}");
     }
 
     #[test]
@@ -2761,12 +2852,86 @@ actions:
     }
 
     #[test]
-    fn inline_comment_default_serializes_as_bare_scalar() {
-        // A default-show InlineComment serializes to the terse
-        // `InlineComment: "# note"` form, not the `{text, show}` mapping.
+    fn inline_comment_show_header_sets_script_default() {
+        // The top-level field sets the duration for every inheriting action,
+        // and accepts a `[low, high]` range like the other timing fields.
+        let yaml = script_yaml_with_header("inline_comment_show: 2.5");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse header field");
+        assert_eq!(script.inline_comment_show, (2.5, 2.5));
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# a note".to_string(),
+                show: None,
+            }
+        );
+
+        let ranged = script_yaml_with_header("inline_comment_show: [1.0, 2.0]");
+        let script: Script = serde_yaml::from_str(&ranged).expect("should parse header range");
+        assert_eq!(script.inline_comment_show, (1.0, 2.0));
+    }
+
+    #[test]
+    fn inline_comment_show_header_accepts_ms_twin() {
+        let yaml = script_yaml_with_header("inline_comment_show_ms: 1500");
+        let script: Script = serde_yaml::from_str(&yaml).expect("should parse the _ms spelling");
+        assert_eq!(script.inline_comment_show, (1.5, 1.5));
+    }
+
+    #[test]
+    fn inline_comment_show_header_rejects_both_spellings() {
+        let yaml =
+            script_yaml_with_header("inline_comment_show: 1.0\ninline_comment_show_ms: 1000");
+        let err =
+            serde_yaml::from_str::<Script>(&yaml).expect_err("both spellings should be rejected");
+        assert!(err.to_string().contains("not both"), "error was: {err}");
+    }
+
+    #[test]
+    fn inline_comment_show_header_rejects_negative() {
+        let yaml = script_yaml_with_header("inline_comment_show: -0.5");
+        let err = serde_yaml::from_str::<Script>(&yaml)
+            .expect_err("a negative header duration should fail");
+        assert!(err.to_string().contains(">= 0"), "error was: {err}");
+    }
+
+    #[test]
+    fn inline_comment_action_show_wins_over_header() {
+        // A per-action `show` is kept verbatim; only inheriting actions pick up
+        // the header value.
+        let yaml = r##"
+output_file: "out.cast"
+inline_comment_show: 2.5
+actions:
+- InlineComment: "# inherits"
+- InlineComment: {text: "# overrides", show: 0.25}
+"##;
+        let script: Script = serde_yaml::from_str(yaml).expect("should parse mixed durations");
+        assert_eq!(script.inline_comment_show, (2.5, 2.5));
+        assert_eq!(
+            script.actions[0],
+            Action::InlineComment {
+                text: "# inherits".to_string(),
+                show: None,
+            }
+        );
+        assert_eq!(
+            script.actions[1],
+            Action::InlineComment {
+                text: "# overrides".to_string(),
+                show: Some(0.25),
+            }
+        );
+    }
+
+    #[test]
+    fn inline_comment_inherited_serializes_as_bare_scalar() {
+        // An inheriting InlineComment serializes to the terse
+        // `InlineComment: "# note"` form, not the `{text, show}` mapping, even
+        // when the script header sets a non-default duration.
         let yaml = serde_yaml::to_string(&Action::InlineComment {
             text: "# a note".to_string(),
-            show: DEFAULT_INLINE_COMMENT_SHOW,
+            show: None,
         })
         .unwrap();
         assert!(
@@ -2775,7 +2940,7 @@ actions:
         );
         assert!(
             !yaml.contains("show"),
-            "default show should be omitted: {yaml}"
+            "an inherited show should be omitted: {yaml}"
         );
     }
 
@@ -3180,6 +3345,7 @@ actions:
             pre_nl_delay: (0.0, 0.0),
             post_nl_delay: (0.1, 0.1),
             key_delay: (0.0, 0.0),
+            inline_comment_show: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
             actions: vec![
@@ -3222,6 +3388,7 @@ actions:
             pre_nl_delay: (0.0, 0.0),
             post_nl_delay: (0.05, 0.05),
             key_delay: (0.0, 0.0),
+            inline_comment_show: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
             actions: vec![
@@ -3271,6 +3438,7 @@ actions:
             pre_nl_delay: (0.0, 0.0),
             post_nl_delay: (0.05, 0.05),
             key_delay: (0.0, 0.0),
+            inline_comment_show: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
             actions: vec![
@@ -3349,6 +3517,7 @@ actions:
             pre_nl_delay: (0.0, 0.0),
             post_nl_delay: (0.2, 0.2),
             key_delay: (0.0, 0.0),
+            inline_comment_show: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
             actions: vec![
@@ -3407,6 +3576,7 @@ actions:
             pre_nl_delay: (0.0, 0.0),
             post_nl_delay: (0.3, 0.3),
             key_delay: (0.0, 0.0),
+            inline_comment_show: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
             actions: vec![Action::Text(stub), Action::Text("exit".to_string())],
@@ -3453,6 +3623,7 @@ actions:
             pre_nl_delay: (0.0, 0.0),
             post_nl_delay: (0.3, 0.3),
             key_delay: (0.0, 0.0),
+            inline_comment_show: (0.0, 0.0),
             with_comments: false,
             comments_at_top: false,
             actions: vec![Action::Text(stub), Action::Text("exit".to_string())],
